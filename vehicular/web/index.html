@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>VECTRA · 车联网可信数据协作</title>
+  <link rel="stylesheet" href="/assets/app.css?v=0.1.1">
+  <script defer src="/assets/app.js?v=0.1.1"></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="#workspace" aria-label="VECTRA 首页"><span class="brand-mark">V<span>↗</span></span><span>VECTRA<small>TRUSTED MOBILITY LAB</small></span></a>
+    <div class="sidebar-label">协作控制台</div>
+    <nav aria-label="主导航">
+      <button class="nav-item active" data-view="workspace"><span class="nav-icon">◫</span>协作工作台<span class="nav-arrow">↗</span></button>
+      <button class="nav-item" data-view="evidence"><span class="nav-icon">▤</span>证据与审计<span class="nav-badge" id="event-nav-count">0</span></button>
+      <button class="nav-item" data-view="verification"><span class="nav-icon">◇</span>结果验证</button>
+      <button class="nav-item" data-view="lab"><span class="nav-icon">⌁</span>安全实验室</button>
+    </nav>
+    <div class="sidebar-note"><span class="live-dot"></span>隐私协作，可信交付<p>身份认证 · 加密通信<br>安全聚合 · 签名审计</p></div>
+    <div class="sidebar-bottom"><span class="avatar">L</span><div>课程实验环境<small>本地演示会话</small></div><span class="lock-icon">▣</span></div>
+  </aside>
+
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="breadcrumb">可信数据协作<span>/</span><strong id="view-label">协作工作台</strong></div>
+      <div class="header-controls"><span class="connection-status" id="connection-status"><i></i>正在连接</span><button class="icon-button" id="refresh-button" title="刷新系统状态" aria-label="刷新系统状态">↻</button><span class="header-divider"></span><span class="env-pill">LOCAL LAB</span></div>
+    </header>
+
+    <main>
+      <div class="connection-error" id="connection-error" role="alert" hidden></div>
+      <section class="view active" id="view-workspace">
+        <div class="page-heading"><div><div class="eyebrow">PRIVACY FIRST. TRUST BY DESIGN.</div><h1>让数据协作，值得信任<span class="heading-dot">.</span></h1><p>面向车联网的多智能体可信数据协作与隐私保护系统</p></div><div class="mode-badge" id="mode-badge">连接实验环境…</div></div>
+        <div class="system-stats">
+          <article class="stat-card"><div class="stat-label">登记可信身份<span class="stat-icon">▦</span></div><div class="stat-value"><span id="node-count">—</span><small>个</small></div><div class="stat-caption" id="node-caption">等待登记身份信息</div></article>
+          <article class="stat-card"><div class="stat-label">协作任务<span class="stat-icon">↗</span></div><div class="stat-value"><span id="task-count">—</span><small>次</small></div><div class="stat-caption" id="task-caption">等待任务状态</div></article>
+          <article class="stat-card"><div class="stat-label">审计链状态<span class="stat-icon">◇</span></div><div class="stat-value audit-value" id="audit-status">—</div><div class="stat-caption" id="audit-caption">等待完整性校验</div></article>
+          <article class="stat-card"><div class="stat-label">协作执行模式<span class="stat-icon">⌘</span></div><div class="stat-value mode-value" id="execution-mode">—</div><div class="stat-caption" id="mode-caption">等待执行配置</div></article>
+        </div>
+
+        <div class="workspace-grid">
+          <section class="panel task-panel"><div class="panel-heading"><div><span class="section-index">01</span><h2>发起可信协作</h2></div><span class="subtle-label">自然语言任务</span></div><p class="panel-description">提出道路统计或证据分析需求，由智能体编排安全工具完成。</p>
+            <form id="task-form"><label class="sr-only" for="task-request">协作任务描述</label><textarea id="task-request" rows="4" maxlength="2000" required placeholder="例如：统计 S101 路段过去 60 秒的平均速度，保护各车辆的私有输入，并生成可验证报告。"></textarea><div class="prompt-chips"><button type="button" data-prompt="统计 S101 路段过去 60 秒的平均速度，保护各车辆的私有输入，并生成可验证报告。">↗ 隐私联合统计</button><button type="button" data-prompt="分析当前安全事件与审计证据，区分被验证身份与自称身份，说明证据的归因边界。">↗ 安全证据分析</button><button type="button" data-prompt="验证最近一次协作签名报告的数字签名与任务绑定，并解释验证结果。">↗ 结果可信检查</button></div><div class="task-footer"><span class="task-context"><i class="live-dot"></i>S101 <span>·</span> 60 秒窗口</span><button class="primary-button" id="submit-task" type="submit">启动协作<span>↗</span></button></div></form>
+            <div class="mode-explanation" id="mode-explanation">演示模式使用确定性编排与真实密码学工具；配置外部模型后启用规划和解释智能体。</div>
+          </section>
+
+          <section class="panel architecture-panel"><div class="panel-heading"><div><span class="section-index">02</span><h2>可信协作路径</h2></div><span class="small-tag">PRIVATE BY DESIGN</span></div><div class="architecture" id="architecture"><div class="node-stack" id="vehicle-nodes"><div class="architecture-empty">节点信息正在加载</div></div><div class="flow-connectors" aria-hidden="true"><span></span><span></span><span></span></div><div class="mpc-node"><span class="arch-symbol">Σ</span><strong>安全聚合</strong><small id="protocol-name">MPC</small></div><span class="flow-arrow" aria-hidden="true">→</span><div class="result-node"><span class="arch-symbol">✓</span><strong>签名结果</strong><small>仅公开聚合值</small></div></div><div class="privacy-line"><span>▣</span><p id="privacy-caption">车辆原始输入保留在参与节点，仅通过协议协作计算。</p></div><div class="protocol-footer"><span id="transport-name">认证加密传输</span><span id="threshold-label">协议参数待加载</span></div></section>
+        </div>
+
+        <div class="workspace-bottom-grid">
+          <section class="panel activity-panel"><div class="panel-heading"><div><span class="section-index">03</span><h2>任务执行记录</h2></div><span class="subtle-label" id="tasks-updated">实时状态</span></div><div id="task-list" class="task-list"><div class="empty-state"><span>↗</span><strong>从一次安全协作开始</strong><p>发起任务后，查看智能体步骤、执行证据与最终报告。</p></div></div></section>
+          <section class="panel results-panel"><div class="panel-heading"><div><span class="section-index">04</span><h2>公开统计结果</h2></div><span class="small-tag">AGGREGATE ONLY</span></div><div id="latest-result" class="latest-result"><div class="empty-state compact"><span>Σ</span><strong>还没有公开统计结果</strong><p>联合统计完成后展示道路平均速度。</p></div></div><div id="result-chart" class="result-chart"></div><div class="results-note">只展示已发布的聚合值。个体车辆速度不在控制台中展示。</div></section>
+        </div>
+      </section>
+
+      <section class="view" id="view-evidence" hidden><div class="page-heading"><div><div class="eyebrow">FOLLOW THE EVIDENCE</div><h1>证据与审计<span class="heading-dot">.</span></h1><p>查看真实事件、认证身份和可验证的审计记录。</p></div><button class="secondary-button" id="check-audit">校验审计链<span>↗</span></button></div><div class="info-banner"><span>ⓘ</span><p><strong>证据归因有边界。</strong> 自称身份不等于通过验证的身份；拒绝事件证明某项校验失败，并不自动证明特定车辆发起了攻击。</p></div><section class="panel"><div class="panel-heading"><div><h2>事件时间线</h2></div><span id="evidence-count" class="subtle-label">0 条事件</span></div><div class="table-scroll"><table class="events-table"><thead><tr><th>时间 / 证据编号</th><th>事件</th><th>自称身份</th><th>已验证身份</th><th>详情</th></tr></thead><tbody id="events-body"></tbody></table></div><div id="events-empty" class="empty-state"><span>▤</span><strong>暂时没有事件</strong><p>执行任务或安全实验后，这里会显示真实审计证据。</p></div></section><div class="audit-proof" id="audit-result" hidden></div></section>
+
+      <section class="view" id="view-verification" hidden><div class="page-heading"><div><div class="eyebrow">VERIFY, THEN TRUST</div><h1>结果验证<span class="heading-dot">.</span></h1><p>独立校验签名报告，观察内容修改后验证结果的变化。</p></div><button class="secondary-button" id="checkpoint-button">签署审计检查点<span>↗</span></button></div><div class="verification-grid"><section class="panel"><div class="panel-heading"><div><h2>签名报告</h2></div><span class="small-tag">EDIT & VERIFY</span></div><label class="field-label" for="report-select">选择已完成的报告</label><select id="report-select"><option value="">暂无可验证报告</option></select><label class="field-label" for="report-json">报告 envelope · 可编辑</label><textarea id="report-json" class="json-editor" rows="16" spellcheck="false" placeholder="完成协作任务后载入签名报告；也可以粘贴需要验证的 JSON。"></textarea><div class="proof-actions"><button class="primary-button" id="verify-report">验证数字签名<span>↗</span></button><button class="secondary-button" id="alter-report">修改一个结果字段</button><a class="text-button disabled" id="download-report" href="#" download>下载报告 ↓</a></div></section><div><section class="panel verification-explanation"><div class="panel-heading"><div><h2>如何读取验证结果</h2></div></div><div class="explanation-step"><span>01</span><div><strong>选择原始报告</strong><p>报告包含公开结果、签名及签发者身份信息。</p></div></div><div class="explanation-step"><span>02</span><div><strong>验证内容与来源</strong><p>校验数字签名，检查报告内容是否与签发时一致。</p></div></div><div class="explanation-step"><span>03</span><div><strong>修改后再次验证</strong><p>编辑聚合结果，再运行验证，观察篡改是否被识别。</p></div></div><div class="small-note">签名有效证明内容与签发者绑定，不代表输入数据一定真实。</div></section><section class="panel verification-outcome" id="verification-outcome"><span class="outcome-symbol">◇</span><h3>等待验证</h3><p>载入报告，查看服务端返回的实际校验结果。</p></section></div></div><section class="panel checkpoint-panel" id="checkpoint-panel" hidden><div class="panel-heading"><div><h2>已签署审计检查点</h2></div></div><p class="panel-description">检查点绑定签署时的链头与记录数量，可用于后续比较与独立验证。</p><pre id="checkpoint-json"></pre></section></section>
+
+      <section class="view" id="view-lab" hidden><div class="page-heading"><div><div class="eyebrow">TEST THE TRUST BOUNDARY</div><h1>安全实验室<span class="heading-dot">.</span></h1><p>触发受控负面场景，检验系统是否在对应保护层拒绝异常请求。</p></div><span class="mode-badge">受控本地实验</span></div><div class="info-banner"><span>ⓘ</span><p>每个实验运行真实校验流程。结果由服务端返回，关联事件可在证据中心查看。</p></div><div class="experiment-grid" id="experiment-grid"></div></section>
+      <footer class="page-footer"><span>VECTRA <span> / </span> TRUSTED MOBILITY LAB</span><span>面向车联网的多智能体可信数据协作与隐私保护系统</span></footer>
+    </main>
+  </div>
+  <div class="toast-stack" id="toast-stack" aria-live="polite"></div>
+  <dialog class="task-dialog" id="task-dialog"><div class="dialog-heading"><div><span class="eyebrow">COLLABORATION TRACE</span><h2>任务详情</h2></div><button class="icon-button" id="close-task-dialog" aria-label="关闭任务详情">×</button></div><div id="task-detail"></div></dialog>
+</body>
+</html>

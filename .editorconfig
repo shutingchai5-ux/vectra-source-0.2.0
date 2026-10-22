@@ -1,0 +1,5 @@
+# Windows PowerShell 5.1 requires a BOM for scripts containing non-ASCII text.
+[*.ps1]
+charset = utf-8-bom
+end_of_line = crlf
+insert_final_newline = true

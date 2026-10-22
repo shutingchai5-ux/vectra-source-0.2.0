@@ -1,0 +1,15 @@
+.venv*/
+.vectra/
+runtime*/
+__pycache__/
+.pytest_cache/
+.pytest-*/
+.build-temp/
+.test-*/
+build/
+dist/
+*.egg-info/
+*.pyc
+.env
+*.log
+artifacts/*.json

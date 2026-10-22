@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vectra-vehicular"
+version = "0.2.0"
+description = "Trustworthy vehicular multi-agent data collaboration and privacy protection"
+requires-python = ">=3.11,<3.15"
+dependencies = [
+  "fastapi>=0.115,<1", "uvicorn>=0.34,<1", "cryptography>=45,<52",
+  "httpx>=0.28,<1", "mpyc==0.11", "langgraph>=1,<2", "python-dotenv>=1,<2", "rfc8785>=0.1,<0.2"
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10"]
+
+[project.scripts]
+vectra = "vehicular.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["vehicular*"]
+
+[tool.setuptools.package-data]
+vehicular = ["web/*.html", "web/*.css", "web/*.js"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["integration: real local multi-process TLS MPC"]

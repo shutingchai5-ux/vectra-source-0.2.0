@@ -1,0 +1,3 @@
+# Portable install: platform-specific transitive dependencies are resolved by pip.
+# Recommended: python run.py setup (installs inside this project's .venv).
+-e .
