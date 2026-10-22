@@ -113,6 +113,10 @@ def create_app(settings=None, llm_transport=None):
     def state(request: Request):
         return request.app.state.service.state()
 
+    @app.get("/api/evidence/analysis")
+    def evidence_analysis(request: Request, event_id: int | None = None):
+        return request.app.state.service.evidence_analysis(event_id=event_id)
+
     @app.post("/api/tasks", status_code=202)
     def create_task(body: TaskRequest, request: Request):
         service = request.app.state.service

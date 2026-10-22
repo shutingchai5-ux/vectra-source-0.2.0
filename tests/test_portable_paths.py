@@ -111,7 +111,8 @@ def test_dashboard_assets_come_from_package_even_when_runtime_root_changes(tmp_p
     client = TestClient(app)
     assert client.get("/").status_code == 200
     assert "vectra_session" in client.cookies
-    for filename, content_type in [("app.css", "text/css"), ("app.js", "javascript")]:
+    for filename, content_type in [("app.css", "text/css"), ("evidence.css", "text/css"),
+                                   ("app.js", "javascript")]:
         response = client.get(f"/assets/{filename}")
         assert response.status_code == 200
         assert content_type in response.headers["content-type"]
@@ -124,7 +125,7 @@ def test_build_metadata_includes_dashboard_assets():
     patterns = metadata["tool"]["setuptools"]["package-data"]["vehicular"]
     assert set(patterns) == {"web/*.html", "web/*.css", "web/*.js"}
     assert {path.name for pattern in patterns for path in PACKAGE_WEB.parent.glob(pattern)} == {
-        "index.html", "app.css", "app.js"
+        "index.html", "app.css", "evidence.css", "app.js"
     }
 
 

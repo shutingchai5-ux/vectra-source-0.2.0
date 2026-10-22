@@ -10,6 +10,7 @@ from typing import TypedDict
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from langgraph.graph import END, START, StateGraph
 
+from .analysis import analyze_events
 from .agents import (AgentError, ToolAgent, COORDINATOR_PROMPT, ANALYST_PROMPT, tool_schema, validate_analysis)
 from .mpc import MpcError, MpcRunner, initialize_samples
 from .security import AuditLog, SecurityError, SecurityStore, canonical_bytes, secure_write
@@ -80,13 +81,20 @@ class CollaborationService:
         if task.get("result"):
             return task["result"]
         signed = self.signed_task(task_id, task["request_id"], road=road, window_seconds=window_seconds)
-        authorize_task(signed["payload"])
+        try:
+            authorize_task(signed["payload"])
+        except SecurityError as exc:
+            self.audit.append("request_rejected", {"task_id": task_id, "code": exc.code,
+                              "layer": "task_policy"}, "coordinator", "coordinator")
+            raise
         self.tasks.reserve_query("local-user", self.settings.query_cooldown)
         accepted = self.gateway.send(self.message(signed))
         if not accepted.get("accepted"):
             raise SecurityError(accepted["code"], accepted["message"])
         self.tasks.step(task_id, "安全执行层", "认证与授权", "mTLS 身份、Ed25519 签名、任务范围与新鲜性校验通过")
         self.tasks.step(task_id, "隐私计算模块", "三方协议", "三个独立进程通过 mTLS 交换秘密份额；等待批准的聚合输出", "running")
+        self.audit.append("mpc_started", {"task_id": task_id, "participant_count": 3, "metric": "mean_speed"},
+                          "coordinator", "coordinator")
         result = self.mpc.run(signed, timeout=self.settings.mpc_timeout)
         current = self.tasks.get(task_id)
         for step in current["steps"]:
@@ -109,6 +117,11 @@ class CollaborationService:
         return [{"id": n["id"], "role": n["role"], "enabled": n["enabled"],
                  "certificate_fingerprint": n["cert_fingerprint"], "expires_at": n["valid_until"]} for n in self.security.identities()]
 
+    def evidence_analysis(self, task_id=None, event_id=None):
+        if not self.audit.verify()["valid"]:
+            raise SecurityError("audit_invalid", "审计链或签名检查点校验失败，不能基于这些记录发布调查结论。")
+        return analyze_events(self.audit.list(limit=80), task_id=task_id, event_id=event_id)
+
     def investigate(self, task_id):
         observed = []
 
@@ -119,14 +132,10 @@ class CollaborationService:
             return {"events": events, "scope": "最近30条公开安全事件摘要"}
 
         if self.settings.mode == "demo":
-            events = query_events()["events"]
-            rejects = [e for e in events if e["kind"] == "request_rejected" or e["kind"] == "experiment_completed"]
-            analysis = {"facts": [f"检索到 {len(events)} 条事件，其中 {len(rejects)} 条涉及拒绝或验证实验。", "密码验证和任务授权由确定性执行层处理。"],
-                        "possible_causes": ["请求重复、签名内容变化或参数超出白名单可能导致拒绝；具体原因应与事件 code 对照。"],
-                        "recommendations": ["检查失败层、已验证身份和任务绑定，先保存证据，再决定是否调整配置。"],
-                        "uncertainties": ["演示模式采用固定模板；日志不能单独证明恶意来源、传感器真实性或不存在其他泄露。"],
-                        "evidence_ids": [e["id"] for e in (rejects or events)[:6]]}
+            analysis = self.evidence_analysis(task_id=task_id)
         else:
+            if not self.audit.verify()["valid"]:
+                raise SecurityError("audit_invalid", "审计链或签名检查点校验失败，不能基于这些记录发布调查结论。")
             text = self.agent.run(ANALYST_PROMPT, "查询最近的身份、签名、权限和计算状态事件，说明确认事实、可能原因和不确定性。",
                 [tool_schema("query_events", "读取最近30条经过过滤的公开审计事件"), tool_schema("identity_status", "查询已登记节点的公开身份状态")],
                 {"query_events": query_events, "identity_status": self.public_nodes},
@@ -292,7 +301,8 @@ class CollaborationService:
             layer = "AES-GCM 认证解密"
         else:
             raise SecurityError("unknown_experiment", "未知实验类型。")
-        event = self.audit.append("experiment_completed", {"scenario": scenario, "blocked": blocked, "layer": layer, "code": code})
+        event = self.audit.append("experiment_completed", {"scenario": scenario, "blocked": blocked,
+                             "layer": layer, "code": code, "validation_event_id": extra.get("event_id")})
         return {"scenario": scenario, "blocked": blocked, "layer": layer, "code": code, "message": message,
                 "event_id": event["id"], "details": extra}
 

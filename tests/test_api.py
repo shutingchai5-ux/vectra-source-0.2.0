@@ -74,6 +74,10 @@ def test_task_api_runs_real_mpc_signs_report_and_preserves_idempotency(client):
     completed_events = [event for event in client.app.state.service.audit.list(1000)
                         if event["kind"] == "statistics_completed"]
     assert len(completed_events) == 1
+    started_events = [event for event in client.app.state.service.audit.list(1000)
+                      if event["kind"] == "mpc_started" and event["details"]["task_id"] == task_id]
+    assert len(started_events) == 1
+    assert started_events[0]["id"] < completed_events[0]["id"]
     for scenario in ("tamper_message", "impersonation", "replay", "unauthorized", "ciphertext", "tamper_report"):
         experiment = client.post("/api/experiments", json={"scenario": scenario})
         assert experiment.status_code == 200
@@ -98,6 +102,45 @@ def test_browser_session_same_origin_host_and_schema_boundaries(client):
     assert state.status_code == 200 and state.headers["cache-control"] == "no-store"
     assert state.headers["x-frame-options"] == "DENY"
     assert "frame-ancestors 'none'" in state.headers["content-security-policy"]
+
+
+@pytest.mark.integration
+def test_offline_investigation_links_experiment_rejection_and_computation_boundary(client):
+    experiment = client.post("/api/experiments", json={"scenario": "unauthorized"}).json()
+    assert experiment["blocked"]
+    latest_analysis = client.get("/api/evidence/analysis")
+    assert latest_analysis.status_code == 200
+    assert experiment["event_id"] in latest_analysis.json()["evidence_ids"]
+    selected_analysis = client.get(f"/api/evidence/analysis?event_id={experiment['details']['event_id']}")
+    assert selected_analysis.status_code == 200
+    assert any("没有进入 MPC" in fact for fact in selected_analysis.json()["facts"])
+    assert client.get("/api/evidence/analysis?event_id=999999").status_code == 403
+    response = client.post("/api/tasks", json=task_request("调查最近的安全事件"))
+    task = await_task(client, response.json()["id"])
+    assert task["status"] == "completed", task.get("error")
+    analysis = task["analysis"]
+    assert experiment["event_id"] in analysis["evidence_ids"]
+    assert experiment["details"]["event_id"] in analysis["evidence_ids"]
+    assert any("没有进入 MPC" in fact for fact in analysis["facts"])
+    assert any("coordinator" in fact for fact in analysis["facts"])
+    assert not any("vehicle-a" in fact for fact in analysis["facts"])
+
+
+@pytest.mark.integration
+def test_offline_investigation_links_failed_task_to_policy_rejection(client):
+    rejected = client.post("/api/tasks", json=task_request("统计 S101 的平均速度", road="S102"))
+    failed = await_task(client, rejected.json()["id"])
+    assert failed["status"] == "failed" and failed["error"]["code"] == "unauthorized"
+    investigation = client.post("/api/tasks", json=task_request("调查最近的安全事件"))
+    completed = await_task(client, investigation.json()["id"])
+    assert completed["status"] == "completed", completed.get("error")
+    analysis = completed["analysis"]
+    assert any("调度前被拒绝" in fact for fact in analysis["facts"])
+    assert any("没有进入 MPC" in fact for fact in analysis["facts"])
+    related = [event for event in client.app.state.service.audit.list()
+               if event["id"] in analysis["evidence_ids"]]
+    assert {event["kind"] for event in related} == {"request_rejected", "task_failed"}
+    assert all(event["details"]["task_id"] == failed["id"] for event in related)
 
 
 @pytest.mark.integration

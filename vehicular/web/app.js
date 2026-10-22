@@ -10,8 +10,12 @@ let reportOptionIds = "";
 let lastLoadedReportId = null;
 let lastEventsFingerprint = "";
 let lastDialogFingerprint = "";
+let selectedEvidenceId = null;
+let analysisRefreshKey = null;
+let analysisRequest = 0;
 const experimentResponses = new Map();
 const pollingTasks = new Set();
+const analyzableKinds = new Set(["request_rejected", "task_failed", "statistics_completed", "experiment_completed", "task_authorized", "mpc_started"]);
 
 const experiments = [
   { id: "tamper_message", title: "消息篡改", category: "INTEGRITY", symbol: "≠", description: "修改已签署消息的接收者字段，检验接收端能否通过数字签名识别内容变化。" },
@@ -189,9 +193,39 @@ function renderEvents() {
   $("#events-body").innerHTML = events.map((event) => {
     const details = event.details ?? {};
     const summary = typeof details === "object" ? details.message ?? details.reason ?? details.code ?? "查看完整证据" : details;
-    return `<tr data-event-id="${escapeHTML(event.id)}"><td>${escapeHTML(formatTime(event.at, true))}<small>证据 #${escapeHTML(event.id)}</small></td><td><span class="event-kind">${escapeHTML(event.kind)}</span></td><td>${escapeHTML(event.claimed_identity ?? "未声明")}</td><td class="${event.verified_identity ? "verified-identity" : "identity-unknown"}">${escapeHTML(event.verified_identity ?? "未提供")}</td><td class="event-details"><details><summary>${escapeHTML(summary)}</summary><pre>${escapeHTML(readable(details))}</pre></details></td></tr>`;
+    const analyze = analyzableKinds.has(event.kind) ? `<button class="analyze-event-button" data-analyze-event-id="${escapeHTML(event.id)}">解读此事件 ↗</button>` : "";
+    return `<tr data-event-id="${escapeHTML(event.id)}"><td>${escapeHTML(formatTime(event.at, true))}<small>证据 #${escapeHTML(event.id)}</small></td><td><span class="event-kind">${escapeHTML(event.kind)}</span></td><td>${escapeHTML(event.claimed_identity ?? "未声明")}</td><td class="${event.verified_identity ? "verified-identity" : "identity-unknown"}">${escapeHTML(event.verified_identity ?? "未提供")}</td><td class="event-details">${analyze}<details><summary>${escapeHTML(summary)}</summary><pre>${escapeHTML(readable(details))}</pre></details></td></tr>`;
   }).join("");
   $$("#events-body [data-event-id]").forEach((row) => { if (expandedIds.has(row.dataset.eventId)) row.querySelector("details").open = true; });
+}
+
+function renderEvidenceAnalysis(analysis, eventId) {
+  const facts = Array.isArray(analysis.facts) ? analysis.facts : [];
+  const evidenceIds = Array.isArray(analysis.evidence_ids) ? analysis.evidence_ids : [];
+  const sections = [["确认事实", "facts"], ["可能原因", "possible_causes"], ["检查建议", "recommendations"], ["不确定性", "uncertainties"]];
+  $("#evidence-analysis-body").innerHTML = `<div class="evidence-analysis-heading"><span class="status-tag completed">已校验审计链</span><strong>${eventId == null ? "最近事件概览" : `证据 #${escapeHTML(eventId)} 的解读`}</strong></div>${sections.map(([title, key]) => {
+    const items = Array.isArray(analysis[key]) ? analysis[key] : [];
+    return items.length ? `<div class="evidence-analysis-section"><strong>${title}</strong><ul>${items.map((item) => `<li>${escapeHTML(item)}</li>`).join("")}</ul></div>` : "";
+  }).join("")}<div class="analysis-evidence">引用证据${evidenceIds.map((id) => `<button data-evidence-id="${escapeHTML(id)}">#${escapeHTML(id)}</button>`).join("")}</div>`;
+  $("#evidence-preview-text").textContent = facts[0] ?? "最近没有可调查的事件。";
+  $("#evidence-preview-meta").textContent = evidenceIds.length ? `已校验审计链 · 引用证据 ${evidenceIds.map((id) => `#${id}`).join("、")}` : "已校验审计链 · 等待任务或受控实验事件";
+}
+
+async function loadEvidenceAnalysis(eventId = null) {
+  const requestId = ++analysisRequest;
+  selectedEvidenceId = eventId;
+  $("#evidence-analysis-body").textContent = "正在校验审计链并整理事件…";
+  try {
+    const query = eventId == null ? "" : `?event_id=${encodeURIComponent(eventId)}`;
+    const analysis = await api(`/api/evidence/analysis${query}`);
+    if (requestId !== analysisRequest) return;
+    renderEvidenceAnalysis(analysis, eventId);
+  } catch (error) {
+    if (requestId !== analysisRequest) return;
+    $("#evidence-analysis-body").textContent = `无法生成调查结论：${error.message}`;
+    $("#evidence-preview-text").textContent = `证据调查暂不可用：${error.message}`;
+    $("#evidence-preview-meta").textContent = "请检查服务与审计链状态";
+  }
 }
 
 function renderReportOptions() {
@@ -273,6 +307,12 @@ async function refreshState(silent = true) {
     $("#connection-status").innerHTML = "<i></i>实验环境已连接";
     $("#connection-error").hidden = true;
     renderStats(); renderArchitecture(); renderTasks(); renderResults(); renderEvents(); renderReportOptions();
+    const latestEvidenceId = Math.max(0, ...currentState.events.filter((entry) => analyzableKinds.has(entry.kind)).map((entry) => Number(entry.id) || 0));
+    const refreshKey = `${currentState.audit?.valid}:${latestEvidenceId}`;
+    if (selectedEvidenceId === null && refreshKey !== analysisRefreshKey) {
+      analysisRefreshKey = refreshKey;
+      loadEvidenceAnalysis();
+    }
     if (!silent) toast("系统状态已刷新。");
   } catch (error) {
     $("#connection-status").className = "connection-status offline";
@@ -338,6 +378,12 @@ document.addEventListener("click", async (event) => {
     if (row) { row.classList.add("event-highlight"); row.querySelector("details").open = true; row.scrollIntoView({ block: "center", behavior: "smooth" }); setTimeout(() => row.classList.remove("event-highlight"), 4500); }
     else toast(`证据 #${evidence.dataset.evidenceId} 超出当前最近事件列表，可查阅完整审计记录。`);
   }
+  const analyze = event.target.closest("[data-analyze-event-id]");
+  if (analyze) {
+    changeView("evidence");
+    loadEvidenceAnalysis(Number(analyze.dataset.analyzeEventId));
+    $("#evidence-analysis-body").scrollIntoView({ block: "start", behavior: "smooth" });
+  }
   const experiment = event.target.closest("[data-experiment]");
   if (experiment) {
     const scenario = experiment.dataset.experiment;
@@ -358,6 +404,7 @@ document.addEventListener("click", async (event) => {
 
 $("#task-list").addEventListener("keydown", (event) => { if (["Enter", " "].includes(event.key) && event.target.dataset.taskId) { event.preventDefault(); openTask(event.target.dataset.taskId); } });
 $("#refresh-button").addEventListener("click", () => refreshState(false));
+$("#analyze-latest").addEventListener("click", () => loadEvidenceAnalysis());
 $("#close-task-dialog").addEventListener("click", () => $("#task-dialog").close());
 $("#task-dialog").addEventListener("click", (event) => { if (event.target === $("#task-dialog")) { const rect = $("#task-dialog").getBoundingClientRect(); if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) $("#task-dialog").close(); } });
 $("#report-select").addEventListener("change", (event) => loadReport(event.target.value));

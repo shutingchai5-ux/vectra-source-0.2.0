@@ -78,6 +78,7 @@ class RsuGateway:
 
             def do_POST(self):
                 claimed = verified = None
+                signed_task_id = None
                 try:
                     if self.path != "/authorize":
                         raise SecurityError("unknown_tool", "该接口未在工具白名单中。")
@@ -97,6 +98,8 @@ class RsuGateway:
                     if peer != "coordinator" or payload.get("message_type") != "task":
                         raise SecurityError("unauthorized", "对端无权调用联合统计工具。")
                     task = gateway.security.verify(payload.get("task", {}), expected_signer="coordinator")
+                    if isinstance(task.get("task_id"), str):
+                        signed_task_id = task["task_id"]
                     authorize_task(task)
                     if task["task_id"] != payload.get("task_id") or task["request_id"] != payload.get("request_id"):
                         raise SecurityError("context_mismatch", "任务与传输消息绑定不匹配。")
@@ -107,7 +110,10 @@ class RsuGateway:
                 except (SecurityError, ValueError, TypeError, KeyError) as exc:
                     code = getattr(exc, "code", "invalid_message")
                     message = str(exc) if isinstance(exc, SecurityError) else "消息格式不正确。"
-                    event = gateway.audit.append("request_rejected", {"code": code, "layer": "RSU", "reason": message}, claimed, verified)
+                    details = {"code": code, "layer": "RSU", "reason": message}
+                    if signed_task_id is not None:
+                        details["task_id"] = signed_task_id
+                    event = gateway.audit.append("request_rejected", details, claimed, verified)
                     body, status = {"accepted": False, "code": code, "message": message, "event_id": event["id"]}, 403
                 raw = json.dumps(body, ensure_ascii=False).encode()
                 self.send_response(status)
