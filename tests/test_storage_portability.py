@@ -10,6 +10,7 @@ import pytest
 from vehicular.mpc import initialize_samples
 from vehicular.mpc_party import read_local_sample
 from vehicular.mpc import MpcError
+from vehicular import security
 from vehicular.security import (
     SecurityError, canonical_bytes, encrypt_object, migrate_encrypted_file,
     secure_read, secure_write,
@@ -20,6 +21,35 @@ def _legacy(path: Path, key: bytes, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(canonical_bytes(encrypt_object(
         payload, key, context="local-file:" + str(path.resolve()))))
+
+
+def test_private_atomic_write_has_no_permission_failure_after_commit(tmp_path, monkeypatch):
+    path = tmp_path / "model-settings.enc"
+    key = secrets.token_bytes(32)
+    secure_write(path, key, {"mode": "demo"})
+    real_chmod = security.os.chmod
+    permission_targets = []
+
+    def temporary_permissions_only(target, mode):
+        permission_targets.append(Path(target))
+        if Path(target) == path:
+            raise PermissionError("cannot change committed target permissions")
+        return real_chmod(target, mode)
+
+    monkeypatch.setattr(security.os, "chmod", temporary_permissions_only)
+    secure_write(path, key, {"mode": "llm"})
+    assert permission_targets and path not in permission_targets
+    assert secure_read(path, key) == {"mode": "llm"}
+    committed = path.read_bytes()
+
+    def denied_permissions(target, mode):
+        raise PermissionError("temporary permission setup denied")
+
+    monkeypatch.setattr(security.os, "chmod", denied_permissions)
+    with pytest.raises(PermissionError):
+        secure_write(path, key, {"mode": "demo"})
+    assert path.read_bytes() == committed
+    assert not list(tmp_path.glob("*.tmp"))
 
 
 def test_report_directory_can_move_to_another_project_root(tmp_path):

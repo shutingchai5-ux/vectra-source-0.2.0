@@ -1,6 +1,7 @@
 """Atomic persistent tasks and input-query budget."""
 import hashlib
 import json
+import math
 import sqlite3
 import threading
 import time
@@ -8,6 +9,36 @@ import uuid
 from pathlib import Path
 
 from .security import SecurityError, canonical_bytes
+
+
+TRACE_KINDS = {"model", "tool", "security", "exchange", "mpc", "report", "analysis"}
+TRACE_METADATA = {
+    "mode", "provider", "model", "tool", "round", "tool_result_count", "tool_count", "phase", "stage", "peer",
+    "task_id", "request_id", "request_digest", "task_digest", "message_digest", "report_digest", "message_type",
+    "session_id", "sequence", "metric", "road", "window_seconds", "participant_count", "threshold",
+    "event_id", "check", "outcome", "tls_version", "transport", "protocol", "status_code", "elapsed_ms",
+    "participants", "sender_role", "recipient_role", "certificate_fingerprint", "code", "count",
+    "cipher", "peer_fingerprint", "source",
+}
+
+
+def _public_metadata(metadata):
+    """Trace metadata is fixed public protocol context, never arbitrary payloads."""
+    if not isinstance(metadata, dict):
+        return {}
+    result = {}
+    for key, value in metadata.items():
+        if key not in TRACE_METADATA:
+            continue
+        if isinstance(value, str) and len(value) <= 512 and all(ord(char) >= 32 for char in value):
+            result[key] = value
+        elif value is None or type(value) in {bool, int}:
+            result[key] = value
+        elif type(value) is float and math.isfinite(value):
+            result[key] = value
+        elif key == "participants" and isinstance(value, list) and len(value) <= 16:
+            result[key] = [item for item in value if isinstance(item, str) and len(item) <= 80]
+    return result
 
 
 class TaskStore:
@@ -27,6 +58,10 @@ class TaskStore:
                 task = json.loads(row[1])
                 if task["status"] in {"queued", "running"}:
                     task.update(status="failed", error={"code": "service_restarted", "message": "服务重启，未完成任务已停止，请创建新的请求。"})
+                    for step in task.get("steps", []):
+                        if step.get("status") in {"queued", "running"}:
+                            step.update(status="failed", updated_at=time.time(),
+                                        detail=step.get("detail", "") + "（服务重启，此步骤未完成。）")
                     db.execute("UPDATE tasks SET body=? WHERE id=?", (json.dumps(task, ensure_ascii=False), row[0]))
 
     def connect(self):
@@ -65,11 +100,38 @@ class TaskStore:
             db.execute("UPDATE tasks SET body=? WHERE id=?", (json.dumps(task, ensure_ascii=False, allow_nan=False), task_id))
             return task
 
-    def step(self, task_id, agent, action, detail, status="completed"):
+    def step(self, task_id, agent, action, detail, status="completed", *, id=None, kind=None,
+             sender=None, recipient=None, protocol=None, evidence_ids=None, metadata=None):
         with self.lock:
             task = self.get(task_id)
-            task["steps"].append({"agent": agent, "action": action, "detail": detail, "status": status, "at": time.time()})
+            now = time.time()
+            step = {"id": id or str(uuid.uuid4()), "agent": agent, "action": action, "detail": detail,
+                    "status": status, "at": now}
+            if kind in TRACE_KINDS:
+                step["kind"] = kind
+            for name, value in (("sender", sender), ("recipient", recipient), ("protocol", protocol)):
+                if isinstance(value, str) and len(value) <= 160:
+                    step[name] = value
+            if evidence_ids is not None:
+                step["evidence_ids"] = list(dict.fromkeys(value for value in evidence_ids if type(value) is int and value > 0))[:80]
+            if metadata is not None:
+                step["metadata"] = _public_metadata(metadata)
+            existing = next((item for item in task["steps"] if item.get("id") == step["id"]), None)
+            if existing is None:
+                task["steps"].append(step)
+            else:
+                step.pop("at")
+                existing.update(step, updated_at=now)
             return self.update(task_id, steps=task["steps"])
+
+    def update_step(self, task_id, step_id, **values):
+        with self.lock:
+            current = next((step for step in self.get(task_id)["steps"] if step.get("id") == step_id), None)
+            if current is None:
+                raise KeyError("Task step does not exist")
+            allowed = {key: current[key] for key in ("agent", "action", "detail", "status", "kind", "sender", "recipient", "protocol", "evidence_ids", "metadata") if key in current}
+            allowed.update(values)
+            return self.step(task_id, id=step_id, **allowed)
 
     def reserve_query(self, principal: str, cooldown: float):
         with self.lock, self.connect() as db:

@@ -74,6 +74,36 @@ def test_provider_errors_are_generic_and_never_echo_secret_body(tmp_path):
     assert "secret-value" not in str(failure.value) and "mock-only-key" not in str(failure.value)
 
 
+@pytest.mark.parametrize("base_url,option", [
+    ("https://api.deepseek.com", "thinking"),
+    ("https://dashscope.aliyuncs.com/compatible-mode/v1", "enable_thinking"),
+    ("https://workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", "enable_thinking"),
+    ("https://compatible.invalid/v1", None),
+    ("https://api.openai.com/v1", "strict"),
+])
+def test_provider_tool_options_match_supported_protocol_without_mutating_schemas(tmp_path, base_url, option):
+    observed = []
+    def provider(request):
+        observed.append(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": "ok"}}]})
+    settings = Settings(data_dir=tmp_path, llm_base_url=base_url, llm_model="mock-model", llm_api_key="mock-key")
+    runner = ToolAgent(settings, httpx.MockTransport(provider))
+    schema = tool_schema("identity_status", "公开身份")
+    runner.complete([], [schema])
+    payload = observed[0]
+    assert schema["function"]["strict"] is True
+    if option == "strict":
+        assert payload["tools"][0]["function"]["strict"] is True
+    else:
+        assert "strict" not in payload["tools"][0]["function"]
+    if option == "thinking":
+        assert payload["thinking"] == {"type": "disabled"}
+    elif option == "enable_thinking":
+        assert payload["enable_thinking"] is False
+    else:
+        assert "thinking" not in payload and "enable_thinking" not in payload
+
+
 def test_analysis_references_must_resolve_to_observed_evidence():
     data = {"facts": ["验签失败"], "possible_causes": ["内容变化"], "recommendations": ["检查请求"],
             "uncertainties": ["不能确认攻击来源"], "evidence_ids": [12]}

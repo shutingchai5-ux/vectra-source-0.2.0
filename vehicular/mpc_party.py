@@ -15,11 +15,19 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from vehicular.mpc import (DONE_MARKER, ERROR_MARKER, PARTICIPANTS,
-                           RESULT_MARKER, MpcError, task_digest)
+                           RESULT_MARKER, TRACE_MARKER, MpcError, task_digest)
 from vehicular.security import SecurityError, SecurityStore
 
 TASK_FIELDS = {"task_id", "request_id", "sender", "recipient", "purpose", "metric",
                "road", "window_seconds", "participants", "issued_at", "expires_at"}
+
+
+def trace(stage: str, peer: int | None = None) -> None:
+    """Emit fixed stage codes only. The coordinator supplies all display text."""
+    item = {"stage": stage}
+    if peer is not None:
+        item["peer"] = PARTICIPANTS[peer]
+    print(TRACE_MARKER + json.dumps(item, separators=(",", ":")), flush=True)
 
 
 def verify_task(root: Path | str, envelope: dict, vehicle_id: str, now: float | None = None) -> dict:
@@ -108,6 +116,8 @@ def install_peer_pinning(mpc) -> None:
             if self.peer_pid is not None and expected.get(str(self.peer_pid)) != self.peer_fingerprint:
                 transport.abort()
                 return
+            if self.peer_pid is not None:
+                trace("tls_peer_verified", self.peer_pid)
             super().connection_made(transport)
 
         def data_received(self, data):
@@ -122,6 +132,7 @@ def install_peer_pinning(mpc) -> None:
                             expected.get(str(peer_pid)) != self.peer_fingerprint):
                         self.transport.abort()
                         return
+                    trace("tls_peer_verified", peer_pid)
             super().data_received(data)
 
         def connection_lost(self, exc):
@@ -156,11 +167,20 @@ def install_peer_pinning(mpc) -> None:
 
 async def collaborate(mpc, private_speed: int, envelope: dict, task: dict) -> dict | None:
     await mpc.start()
+    trace("network_ready")
     secure_integer = mpc.SecInt(32)
+    trace("shares_started")
     secret_inputs = mpc.input(secure_integer(private_speed), senders=range(3))
+    # MPyC input returns secure placeholders. Gather waits for _distribute's
+    # local sends and all incoming shares, without reconstructing any input.
+    await mpc.gather(secret_inputs)
+    trace("shares_ready")
     # Reconstruction is restricted to party 0; only the approved mean is emitted.
+    trace("output_started")
     total = await mpc.output(mpc.sum(secret_inputs), receivers=0)
+    trace("output_ready" if mpc.pid == 0 else "output_sent")
     await mpc.shutdown()
+    trace("protocol_closed")
     if mpc.pid != 0:
         return None
     return {"average_speed": round(total / 300, 2), "participant_count": 3,
@@ -180,7 +200,9 @@ def main() -> int:
             raise MpcError("task_unauthorized", "任务对象过大。")
         envelope = json.loads(args.task_file.read_text("utf-8"))
         task = verify_task(args.root, envelope, args.vehicle)
+        trace("task_verified")
         private_speed = read_local_sample(args.root, args.vehicle, task)
+        trace("input_verified")
         # Import MPyC after independent authorization; MPyC consumes only its args.
         sys.argv = [sys.argv[0]] + mpyc_args
         from mpyc.runtime import mpc

@@ -37,6 +37,7 @@ class Settings:
     llm_base_url: str = "https://api.openai.com/v1"
     llm_api_key: str = field(default="", repr=False)
     llm_model: str = ""
+    llm_provider: str = ""
     query_cooldown: float = 30
     mpc_timeout: float = 20
 
@@ -49,7 +50,7 @@ class Settings:
                   if value is not None}
         values.update(os.environ)
         path = Path(values.get("VECTRA_DATA_DIR", "runtime")).expanduser()
-        return cls(
+        settings = cls(
             data_dir=(path if path.is_absolute() else root / path).resolve(),
             mode=values.get("VECTRA_MODE", "demo"),
             host=values.get("VECTRA_HOST", "127.0.0.1"),
@@ -57,9 +58,14 @@ class Settings:
             llm_base_url=values.get("LLM_BASE_URL", "https://api.openai.com/v1").rstrip("/"),
             llm_api_key=values.get("LLM_API_KEY", ""),
             llm_model=values.get("LLM_MODEL", ""),
+            llm_provider=values.get("LLM_PROVIDER", ""),
             query_cooldown=float(values.get("VECTRA_QUERY_COOLDOWN", "30")),
             mpc_timeout=float(values.get("VECTRA_MPC_TIMEOUT", "20")),
         )
+        # CLI validation and diagnostics must see the same persisted choices
+        # as the service, before checking a possibly incomplete old .env.
+        from .model_settings import ModelSettingsStore
+        return ModelSettingsStore(settings.data_dir).load(settings)
 
     def validate(self):
         if self.mode not in {"demo", "llm"}:

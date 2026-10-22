@@ -43,7 +43,7 @@ function publicDetails(value, depth = 0) {
   if (depth > 7) return "…";
   if (Array.isArray(value)) return value.map((item) => publicDetails(item, depth + 1));
   if (value && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, /^(private_?inputs?|individual_?speeds?|raw_?speeds?|secret_?key|shares|plaintext|inputs)$/i.test(key) ? "[私有数据不公开]" : publicDetails(child, depth + 1)]));
+    return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, /^(private_?inputs?|individual_?speeds?|raw_?speeds?|secret_?key|private_?key|api_?key|access_?token|shares|plaintext|inputs)$/i.test(key) ? "[私有数据不公开]" : publicDetails(child, depth + 1)]));
   }
   return value;
 }
@@ -82,13 +82,14 @@ function setBusy(button, busy, message = "正在执行…") {
 }
 
 function changeView(view) {
-  if (!["workspace", "evidence", "verification", "lab"].includes(view)) view = "workspace";
+  if (!["workspace", "evidence", "verification", "lab", "model-settings"].includes(view)) view = "workspace";
   activeView = view;
   $$(".view").forEach((element) => { const match = element.id === `view-${view}`; element.hidden = !match; element.classList.toggle("active", match); });
   $$(".nav-item").forEach((element) => { element.classList.toggle("active", element.dataset.view === view); if (element.dataset.view === view) element.setAttribute("aria-current", "page"); else element.removeAttribute("aria-current"); });
-  $("#view-label").textContent = { workspace: "协作工作台", evidence: "证据与审计", verification: "结果验证", lab: "安全实验室" }[view];
+  $("#view-label").textContent = { workspace: "协作工作台", evidence: "证据与审计", verification: "结果验证", lab: "安全实验室", "model-settings": "模型设置" }[view];
   history.replaceState(null, "", `#${view}`);
   window.scrollTo({ top: 0, behavior: "instant" });
+  if (view === "workspace") window.VectraChat?.resume();
 }
 
 function statusInfo(status) {
@@ -129,8 +130,8 @@ function renderStats() {
   $("#audit-status").className = `stat-value audit-value ${audit?.valid === true ? "good" : audit?.valid === false ? "bad" : ""}`;
   $("#audit-caption").textContent = audit ? `${audit.count ?? currentState.events?.length ?? 0} 条记录 · ${audit.valid === true ? "链校验通过" : audit.reason ?? "等待校验"}` : "等待完整性校验";
   const llm = currentState.mode === "llm";
-  $("#execution-mode").textContent = llm ? "双智能体" : "确定性演示";
-  $("#mode-badge").textContent = llm ? "外部模型 · 双智能体协作" : "DEMO · 确定性工具编排";
+  $("#execution-mode").textContent = llm ? "API Token" : "Demo";
+  $("#mode-badge").textContent = llm ? "API TOKEN · 双智能体协作" : "DEMO · 确定性工具编排";
   $("#mode-caption").textContent = llm ? currentState.llm?.model ?? "外部模型已配置" : "真实安全工具 · 无模型调用";
   $("#mode-explanation").textContent = llm ? `规划与解释智能体使用 ${currentState.llm?.model ?? "外部模型"}；密码学、授权与验证由服务端工具执行。` : "演示模式使用确定性任务编排与真实密码学工具，不调用大语言模型。配置外部模型后启用规划与解释智能体。";
   const eventCount = currentState.events?.length ?? 0;
@@ -295,6 +296,7 @@ function upsertTask(task) {
   const index = currentState.tasks.findIndex((entry) => entry.id === task.id);
   if (index < 0) currentState.tasks.push(task); else currentState.tasks[index] = task;
   renderTasks(); renderResults(); renderReportOptions(); renderStats();
+  window.VectraChat?.sync(currentState);
 }
 
 async function refreshState(silent = true) {
@@ -307,6 +309,7 @@ async function refreshState(silent = true) {
     $("#connection-status").innerHTML = "<i></i>实验环境已连接";
     $("#connection-error").hidden = true;
     renderStats(); renderArchitecture(); renderTasks(); renderResults(); renderEvents(); renderReportOptions();
+    window.VectraChat?.sync(currentState);
     const latestEvidenceId = Math.max(0, ...currentState.events.filter((entry) => analyzableKinds.has(entry.kind)).map((entry) => Number(entry.id) || 0));
     const refreshKey = `${currentState.audit?.valid}:${latestEvidenceId}`;
     if (selectedEvidenceId === null && refreshKey !== analysisRefreshKey) {
@@ -350,14 +353,20 @@ $("#task-form").addEventListener("submit", async (event) => {
   const request = $("#task-request").value.trim();
   if (!request) { $("#task-request").focus(); return; }
   const button = $("#submit-task");
+  const pendingId = window.VectraChat?.beginRequest(request);
   setBusy(button, true, "正在发起…");
   try {
     const task = await api("/api/tasks", { method: "POST", body: JSON.stringify({ request, request_id: crypto.randomUUID(), road: "S101", window_seconds: 60 }) });
+    window.VectraChat?.acceptRequest(pendingId, task);
     upsertTask(task);
+    $("#task-request").value = "";
     toast("协作任务已创建，正在执行安全工具。");
     await refreshState();
-    if (!["completed", "failed"].includes(statusInfo(task.status)[1])) pollTask(task.id);
-  } catch (error) { toast(`发起任务失败：${error.message}`, true); }
+    if (!["completed", "failed"].includes(statusInfo(task.status)[1])) {
+      if (window.VectraChat) window.VectraChat.watchTask(task.id);
+      else pollTask(task.id);
+    }
+  } catch (error) { window.VectraChat?.rejectRequest(pendingId, error.message); toast(`发起任务失败：${error.message}`, true); }
   finally { setBusy(button, false); }
 });
 
@@ -367,7 +376,7 @@ document.addEventListener("click", async (event) => {
   const prompt = event.target.closest("[data-prompt]");
   if (prompt) { $("#task-request").value = prompt.dataset.prompt; $("#task-request").focus(); }
   const task = event.target.closest("[data-task-id]");
-  if (task) openTask(task.dataset.taskId);
+  if (task) { if (activeView === "workspace" && window.VectraChat) window.VectraChat.selectTask(task.dataset.taskId); else openTask(task.dataset.taskId); }
   const load = event.target.closest("[data-load-report]");
   if (load) { $("#task-dialog").close(); changeView("verification"); loadReport(load.dataset.loadReport); }
   const evidence = event.target.closest("[data-evidence-id]");
@@ -402,7 +411,7 @@ document.addEventListener("click", async (event) => {
   }
 });
 
-$("#task-list").addEventListener("keydown", (event) => { if (["Enter", " "].includes(event.key) && event.target.dataset.taskId) { event.preventDefault(); openTask(event.target.dataset.taskId); } });
+$("#task-list").addEventListener("keydown", (event) => { if (["Enter", " "].includes(event.key) && event.target.dataset.taskId) { event.preventDefault(); if (window.VectraChat) window.VectraChat.selectTask(event.target.dataset.taskId); else openTask(event.target.dataset.taskId); } });
 $("#refresh-button").addEventListener("click", () => refreshState(false));
 $("#analyze-latest").addEventListener("click", () => loadEvidenceAnalysis());
 $("#close-task-dialog").addEventListener("click", () => $("#task-dialog").close());

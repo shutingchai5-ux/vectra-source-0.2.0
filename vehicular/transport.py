@@ -15,6 +15,15 @@ from cryptography.x509.oid import NameOID
 from .security import SecurityError
 
 PARTICIPANTS = ["vehicle-a", "vehicle-b", "vehicle-c"]
+_RSU_CHECKS = {
+    "transport_identity": ("TLS 对端身份验证", "RSU 已将实际 TLS 客户端证书绑定到登记身份。"),
+    "message_signature": ("消息数字签名验证", "消息 Ed25519 签名与 TLS 对端身份一致。"),
+    "message_context": ("消息上下文校验", "消息发送者、接收者、用途与允许调用的身份一致。"),
+    "task_signature": ("独立任务签名验证", "内层任务已通过协调器签名验证。"),
+    "task_policy": ("最小授权策略校验", "任务仅允许固定三车、S101、60 秒窗口和均值输出，且仍在有效期内。"),
+    "task_binding": ("任务与消息绑定校验", "内层任务与传输消息的任务及请求标识一致。"),
+    "replay_guard": ("防重放窗口校验", "认证消息已通过持久化序号与会话接收窗口检查。"),
+}
 
 
 def authorize_task(task):
@@ -79,6 +88,7 @@ class RsuGateway:
             def do_POST(self):
                 claimed = verified = None
                 signed_task_id = None
+                checks = []
                 try:
                     if self.path != "/authorize":
                         raise SecurityError("unknown_tool", "该接口未在工具白名单中。")
@@ -90,20 +100,27 @@ class RsuGateway:
                     der = self.connection.getpeercert(binary_form=True)
                     cert = x509.load_der_x509_certificate(der)
                     peer = gateway.security.authenticated_identity(der)
+                    checks.append("transport_identity")
                     # Transport identity and signing identity must agree before attribution.
                     payload = gateway.security.verify(envelope, expected_signer=peer)
                     verified = peer
+                    checks.append("message_signature")
                     if payload.get("sender") != peer or payload.get("recipient") != "rsu" or payload.get("purpose") != "traffic_statistics":
                         raise SecurityError("context_mismatch", "身份、接收者或消息用途不匹配。")
                     if peer != "coordinator" or payload.get("message_type") != "task":
                         raise SecurityError("unauthorized", "对端无权调用联合统计工具。")
+                    checks.append("message_context")
                     task = gateway.security.verify(payload.get("task", {}), expected_signer="coordinator")
+                    checks.append("task_signature")
                     if isinstance(task.get("task_id"), str):
                         signed_task_id = task["task_id"]
                     authorize_task(task)
+                    checks.append("task_policy")
                     if task["task_id"] != payload.get("task_id") or task["request_id"] != payload.get("request_id"):
                         raise SecurityError("context_mismatch", "任务与传输消息绑定不匹配。")
+                    checks.append("task_binding")
                     gateway.guard.accept(payload)
+                    checks.append("replay_guard")
                     event = gateway.audit.append("task_authorized", {"task_id": task["task_id"], "transport": "mTLS", "metric": "mean_speed"}, claimed, verified)
                     body = {"accepted": True, "event_id": event["id"], "task_id": task["task_id"]}
                     status = 200
@@ -115,6 +132,7 @@ class RsuGateway:
                         details["task_id"] = signed_task_id
                     event = gateway.audit.append("request_rejected", details, claimed, verified)
                     body, status = {"accepted": False, "code": code, "message": message, "event_id": event["id"]}, 403
+                body["checks"] = checks
                 raw = json.dumps(body, ensure_ascii=False).encode()
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -135,19 +153,56 @@ class RsuGateway:
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
 
-    def send(self, envelope, identity="coordinator"):
+    def send(self, envelope, identity="coordinator", on_progress=None):
+        actor = identity if identity in {"coordinator", "analyst", "report", "rsu", *PARTICIPANTS} else "client"
+
+        def progress(action, detail, *, status="completed", kind="security", sender=None,
+                     recipient="rsu", metadata=None, evidence_ids=None, identifier=None):
+            if on_progress is not None:
+                event = {"agent": "RSU 安全网关", "action": action, "detail": detail, "status": status,
+                         "kind": kind, "sender": sender or actor, "recipient": recipient,
+                         "protocol": "mTLS / TLS 1.3 / Ed25519", "metadata": metadata or {}}
+                if evidence_ids:
+                    event["evidence_ids"] = evidence_ids
+                if identifier is not None:
+                    event["id"] = identifier
+                on_progress(event)
+
         context = ssl.create_default_context(cafile=str(self.root / "ca/ca.crt"))
         context.minimum_version = ssl.TLSVersion.TLSv1_3
         context.load_cert_chain(self.root / f"identities/{identity}/tls.crt", self.root / f"identities/{identity}/tls.key")
+        progress("发送签名任务封装", "开始向 RSU 提交携带签名的任务消息；接收方将独立验证。", status="running",
+                 kind="exchange", metadata={"stage": "request_started"}, identifier="rsu-request")
         with httpx.Client(verify=context, trust_env=False, timeout=10) as client:
             with client.stream("POST", f"https://127.0.0.1:{self.server.server_port}/authorize", json=envelope) as response:
                 stream = response.extensions.get("network_stream")
                 tls = stream.get_extra_info("ssl_object") if stream else None
-                if tls is None:
+                if tls is None or tls.version() != "TLSv1.3":
                     raise SecurityError("untrusted_peer", "未建立可验证的 TLS 连接。")
-                self.security.authenticated_identity(tls.getpeercert(True), expected="rsu")
+                certificate = tls.getpeercert(True)
+                self.security.authenticated_identity(certificate, expected="rsu")
+                progress("签名任务封装已发送", "携带签名的任务消息已发送到 RSU；消息内容不进入过程记录。",
+                         kind="exchange", metadata={"stage": "request_sent"}, identifier="rsu-request")
+                progress("RSU 连接身份已验证", "实际连接已协商 TLS 1.3，并验证 RSU 证书与登记身份。",
+                         sender="rsu", recipient=actor,
+                         metadata={"stage": "rsu_peer_verified", "tls_version": tls.version(),
+                                   "cipher": tls.cipher()[0], "peer_fingerprint": hashlib.sha256(certificate).hexdigest()})
                 response.read()
-                return response.json()
+                body = response.json()
+                event_id = body.get("event_id")
+                evidence = [event_id] if type(event_id) is int and event_id > 0 else []
+                for check in body.get("checks", []):
+                    if isinstance(check, str) and check in _RSU_CHECKS:
+                        action, detail = _RSU_CHECKS[check]
+                        progress(action, detail, sender="rsu", recipient=actor,
+                                 metadata={"stage": "rsu_check", "check": check, **({"event_id": event_id} if evidence else {})},
+                                 evidence_ids=evidence)
+                accepted = body.get("accepted") is True
+                progress("收到 RSU 授权" if accepted else "收到 RSU 拒绝", "RSU 已批准此请求进入隐私计算调度。" if accepted else "RSU 已拒绝本次请求；后续未完成的校验不标记为通过。",
+                         status="completed" if accepted else "rejected", kind="exchange", sender="rsu", recipient=actor,
+                         metadata={"stage": "authorization_response", "outcome": "accepted" if accepted else "rejected",
+                                   **({"event_id": event_id} if evidence else {})}, evidence_ids=evidence)
+                return body
 
     def close(self):
         self.server.shutdown()

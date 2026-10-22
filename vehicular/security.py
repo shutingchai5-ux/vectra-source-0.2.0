@@ -131,8 +131,9 @@ def _atomic_write(path: Path, data: bytes, private: bool = False) -> None:
                 if attempt == 5:
                     raise
                 time.sleep(0.01 * 2 ** attempt)
-        if private:
-            os.chmod(path, 0o600)
+        # The replacement retains the temporary file's private permissions.
+        # Do not perform a fallible chmod after committing the new contents:
+        # callers must be able to trust that a reported failure kept the old file.
     finally:
         temporary.unlink(missing_ok=True)
 

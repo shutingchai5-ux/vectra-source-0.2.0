@@ -5,9 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>VECTRA · 车联网可信数据协作</title>
-  <link rel="stylesheet" href="/assets/app.css?v=1.0.1">
-  <link rel="stylesheet" href="/assets/evidence.css?v=1.0.1">
-  <script defer src="/assets/app.js?v=1.0.1"></script>
+  <link rel="stylesheet" href="/assets/app.css?v=1.0.2-chat">
+  <link rel="stylesheet" href="/assets/evidence.css?v=1.0.2-chat">
+  <link rel="stylesheet" href="/assets/model-settings.css?v=1.0.2-chat">
+  <link rel="stylesheet" href="/assets/chat-workspace.css?v=1.0.2-chat">
+  <script defer src="/assets/app.js?v=1.0.2-chat"></script>
+  <script defer src="/assets/model-settings.js?v=1.0.2-chat"></script>
+  <script defer src="/assets/chat-workspace.js?v=1.0.2-chat"></script>
 </head>
 <body>
   <aside class="sidebar">
@@ -18,6 +22,7 @@
       <button class="nav-item" data-view="evidence"><span class="nav-icon">▤</span>证据与审计<span class="nav-badge" id="event-nav-count">0</span></button>
       <button class="nav-item" data-view="verification"><span class="nav-icon">◇</span>结果验证</button>
       <button class="nav-item" data-view="lab"><span class="nav-icon">⌁</span>安全实验室</button>
+      <button class="nav-item" data-view="model-settings" aria-label="模型设置"><span class="nav-icon">⚙</span>模型设置</button>
     </nav>
     <div class="sidebar-note"><span class="live-dot"></span>隐私协作，可信交付<p>身份认证 · 加密通信<br>安全聚合 · 签名审计</p></div>
     <div class="sidebar-bottom"><span class="avatar">L</span><div>课程实验环境<small>本地演示会话</small></div><span class="lock-icon">▣</span></div>
@@ -32,22 +37,36 @@
     <main>
       <div class="connection-error" id="connection-error" role="alert" hidden></div>
       <section class="view active" id="view-workspace">
-        <div class="page-heading"><div><div class="eyebrow">PRIVACY FIRST. TRUST BY DESIGN.</div><h1>让数据协作，值得信任<span class="heading-dot">.</span></h1><p>面向车联网的多智能体可信数据协作与隐私保护系统</p></div><div class="mode-badge" id="mode-badge">连接实验环境…</div></div>
+        <div class="chat-page-heading"><div><div class="eyebrow">VECTRA / COLLABORATIVE INTELLIGENCE</div><h1>每一次协作，都清晰可见<span class="heading-dot">.</span></h1></div><button class="chat-mode-control" data-view="model-settings"><span class="live-dot"></span><span id="mode-badge">连接实验环境…</span><span aria-hidden="true">⌄</span></button></div>
+        <div class="chat-workspace-grid">
+          <section class="conversation-panel" aria-label="协作对话">
+            <div class="conversation-toolbar"><div class="conversation-title"><span class="assistant-avatar small" aria-hidden="true">V</span><div><strong>可信协作助手</strong><span>任务、动作与证据，在同一条时间线上</span></div></div><button class="new-conversation-button" id="new-conversation" type="button"><span aria-hidden="true">＋</span>新会话</button></div>
+            <div class="conversation-history-control"><label for="chat-session-select">会话记录</label><select id="chat-session-select" aria-label="切换历史会话"><option value="">新会话</option></select><span class="chat-stream-status" id="chat-stream-status"><i></i>等待任务</span></div>
+            <div class="conversation-scroll" id="conversation-scroll" tabindex="0" aria-label="协作消息与执行步骤"><div id="chat-messages"></div></div>
+            <button class="jump-to-latest" id="jump-to-latest" type="button" hidden>有新的执行进展 · 跳到最新 ↓</button>
+            <div class="chat-composer">
+              <div class="prompt-chips chat-prompt-chips"><button type="button" data-prompt="统计 S101 路段过去 60 秒的平均速度，保护各车辆的私有输入，并生成可验证报告。"><span aria-hidden="true">Σ</span> 隐私联合统计</button><button type="button" data-prompt="分析当前安全事件与审计证据，区分被验证身份与自称身份，说明证据的归因边界。"><span aria-hidden="true">◇</span> 安全证据分析</button><button type="button" data-prompt="验证最近一次协作签名报告的数字签名与任务绑定，并解释验证结果。"><span aria-hidden="true">✓</span> 检查可信结果</button></div>
+              <form id="task-form"><label class="sr-only" for="task-request">向可信协作助手发送任务</label><textarea id="task-request" rows="2" maxlength="2000" required placeholder="描述你的协作任务，例如：保护车辆隐私，统计 S101 路段平均速度…"></textarea><div class="chat-composer-footer"><span><span class="composer-lock" aria-hidden="true">▣</span> 原始单车数据不进入对话</span><button class="primary-button chat-send-button" id="submit-task" type="submit">发送任务<span aria-hidden="true">↑</span></button></div></form>
+              <p class="chat-mode-explanation" id="mode-explanation">演示模式使用确定性编排与真实密码学工具。</p>
+            </div>
+          </section>
+          <aside class="execution-inspector" aria-label="实时安全操作与信息交换">
+            <section class="inspector-panel"><div class="inspector-heading"><div><span class="inspector-eyebrow">LIVE EXECUTION</span><h2>协作执行现场</h2></div><span class="inspector-live-indicator" id="inspector-live-indicator">待命</span></div><div class="current-operation" id="current-operation"><span class="operation-symbol">⌁</span><div><strong>等待协作任务</strong><p>发送任务后，实时追踪安全工具与节点之间的协作。</p></div></div><div class="execution-phases" id="execution-phases" aria-label="真实执行阶段"></div><div class="inspector-metrics" id="inspector-metrics"><div><strong>0</strong><span>安全操作</span></div><div><strong>0</strong><span>信息交换</span></div><div><strong>0</strong><span>模型动作</span></div></div></section>
+            <section class="inspector-panel node-inspector"><div class="inspector-section-heading"><h3>参与节点</h3><span id="active-node-caption">等待任务</span></div><div id="live-node-map" class="live-node-map"></div><p class="inspector-disclosure">节点状态来自当前任务的实际动作记录。</p></section>
+            <section class="inspector-panel communication-inspector"><div class="inspector-section-heading"><h3>信息交换</h3><span class="communication-count" id="communication-count">0 条</span></div><div id="communication-feed" class="communication-feed"><div class="communication-empty"><span>⇄</span><p>节点之间每一次可公开的信息交换<br>都会在这里留下轨迹</p></div></div></section>
+            <div class="execution-boundary-note"><span aria-hidden="true">ⓘ</span><p>展示模型的显式操作与执行层结果。原始输入、秘密份额和模型内部思维不会在此公开。</p></div>
+          </aside>
+        </div>
+        <details class="runtime-overview"><summary><span><span aria-hidden="true">▦</span> 运行概览与历史记录</span><span>身份 · 审计 · 统计结果 <span aria-hidden="true">⌄</span></span></summary><div class="runtime-overview-content">
         <div class="system-stats">
           <article class="stat-card"><div class="stat-label">登记可信身份<span class="stat-icon">▦</span></div><div class="stat-value"><span id="node-count">—</span><small>个</small></div><div class="stat-caption" id="node-caption">等待登记身份信息</div></article>
           <article class="stat-card"><div class="stat-label">协作任务<span class="stat-icon">↗</span></div><div class="stat-value"><span id="task-count">—</span><small>次</small></div><div class="stat-caption" id="task-caption">等待任务状态</div></article>
           <article class="stat-card"><div class="stat-label">审计链状态<span class="stat-icon">◇</span></div><div class="stat-value audit-value" id="audit-status">—</div><div class="stat-caption" id="audit-caption">等待完整性校验</div></article>
-          <article class="stat-card"><div class="stat-label">协作执行模式<span class="stat-icon">⌘</span></div><div class="stat-value mode-value" id="execution-mode">—</div><div class="stat-caption" id="mode-caption">等待执行配置</div></article>
+          <article class="stat-card mode-stat-card"><div class="stat-label">协作执行模式<span class="stat-icon">⌘</span></div><div class="stat-value mode-value" id="execution-mode">—</div><div class="stat-caption" id="mode-caption">等待执行配置</div><button class="mode-settings-shortcut" data-view="model-settings">切换模式 / 配置模型 <span aria-hidden="true">↗</span></button></article>
         </div>
 
-        <section class="panel evidence-preview-panel"><div class="panel-heading"><div><span class="section-index">NEW</span><h2>最近安全证据</h2></div><button class="secondary-button" data-view="evidence">查看调查结论 ↗</button></div><p id="evidence-preview-text">正在检查审计记录…</p><div class="evidence-preview-meta" id="evidence-preview-meta">调查结论来自已校验的审计事件，不读取单车输入。</div></section>
-
-        <div class="workspace-grid">
-          <section class="panel task-panel"><div class="panel-heading"><div><span class="section-index">01</span><h2>发起可信协作</h2></div><span class="subtle-label">自然语言任务</span></div><p class="panel-description">提出道路统计或证据分析需求，由智能体编排安全工具完成。</p>
-            <form id="task-form"><label class="sr-only" for="task-request">协作任务描述</label><textarea id="task-request" rows="4" maxlength="2000" required placeholder="例如：统计 S101 路段过去 60 秒的平均速度，保护各车辆的私有输入，并生成可验证报告。"></textarea><div class="prompt-chips"><button type="button" data-prompt="统计 S101 路段过去 60 秒的平均速度，保护各车辆的私有输入，并生成可验证报告。">↗ 隐私联合统计</button><button type="button" data-prompt="分析当前安全事件与审计证据，区分被验证身份与自称身份，说明证据的归因边界。">↗ 安全证据分析</button><button type="button" data-prompt="验证最近一次协作签名报告的数字签名与任务绑定，并解释验证结果。">↗ 结果可信检查</button></div><div class="task-footer"><span class="task-context"><i class="live-dot"></i>S101 <span>·</span> 60 秒窗口</span><button class="primary-button" id="submit-task" type="submit">启动协作<span>↗</span></button></div></form>
-            <div class="mode-explanation" id="mode-explanation">演示模式使用确定性编排与真实密码学工具；配置外部模型后启用规划和解释智能体。</div>
-          </section>
-
+        <section class="panel evidence-preview-panel"><div class="panel-heading"><div><h2>最近安全证据</h2></div><button class="secondary-button" data-view="evidence">查看调查结论 ↗</button></div><p id="evidence-preview-text">正在检查审计记录…</p><div class="evidence-preview-meta" id="evidence-preview-meta">调查结论来自已校验的审计事件，不读取单车输入。</div></section>
+        <div class="workspace-grid runtime-support-grid">
           <section class="panel architecture-panel"><div class="panel-heading"><div><span class="section-index">02</span><h2>可信协作路径</h2></div><span class="small-tag">PRIVATE BY DESIGN</span></div><div class="architecture" id="architecture"><div class="node-stack" id="vehicle-nodes"><div class="architecture-empty">节点信息正在加载</div></div><div class="flow-connectors" aria-hidden="true"><span></span><span></span><span></span></div><div class="mpc-node"><span class="arch-symbol">Σ</span><strong>安全聚合</strong><small id="protocol-name">MPC</small></div><span class="flow-arrow" aria-hidden="true">→</span><div class="result-node"><span class="arch-symbol">✓</span><strong>签名结果</strong><small>仅公开聚合值</small></div></div><div class="privacy-line"><span>▣</span><p id="privacy-caption">车辆原始输入保留在参与节点，仅通过协议协作计算。</p></div><div class="protocol-footer"><span id="transport-name">认证加密传输</span><span id="threshold-label">协议参数待加载</span></div></section>
         </div>
 
@@ -55,6 +74,7 @@
           <section class="panel activity-panel"><div class="panel-heading"><div><span class="section-index">03</span><h2>任务执行记录</h2></div><span class="subtle-label" id="tasks-updated">实时状态</span></div><div id="task-list" class="task-list"><div class="empty-state"><span>↗</span><strong>从一次安全协作开始</strong><p>发起任务后，查看智能体步骤、执行证据与最终报告。</p></div></div></section>
           <section class="panel results-panel"><div class="panel-heading"><div><span class="section-index">04</span><h2>公开统计结果</h2></div><span class="small-tag">AGGREGATE ONLY</span></div><div id="latest-result" class="latest-result"><div class="empty-state compact"><span>Σ</span><strong>还没有公开统计结果</strong><p>联合统计完成后展示道路平均速度。</p></div></div><div id="result-chart" class="result-chart"></div><div class="results-note">只展示已发布的聚合值。个体车辆速度不在控制台中展示。</div></section>
         </div>
+        </div></details>
       </section>
 
       <section class="view" id="view-evidence" hidden>
@@ -72,6 +92,50 @@
       <section class="view" id="view-verification" hidden><div class="page-heading"><div><div class="eyebrow">VERIFY, THEN TRUST</div><h1>结果验证<span class="heading-dot">.</span></h1><p>独立校验签名报告，观察内容修改后验证结果的变化。</p></div><button class="secondary-button" id="checkpoint-button">签署审计检查点<span>↗</span></button></div><div class="verification-grid"><section class="panel"><div class="panel-heading"><div><h2>签名报告</h2></div><span class="small-tag">EDIT & VERIFY</span></div><label class="field-label" for="report-select">选择已完成的报告</label><select id="report-select"><option value="">暂无可验证报告</option></select><label class="field-label" for="report-json">报告 envelope · 可编辑</label><textarea id="report-json" class="json-editor" rows="16" spellcheck="false" placeholder="完成协作任务后载入签名报告；也可以粘贴需要验证的 JSON。"></textarea><div class="proof-actions"><button class="primary-button" id="verify-report">验证数字签名<span>↗</span></button><button class="secondary-button" id="alter-report">修改一个结果字段</button><a class="text-button disabled" id="download-report" href="#" download>下载报告 ↓</a></div></section><div><section class="panel verification-explanation"><div class="panel-heading"><div><h2>如何读取验证结果</h2></div></div><div class="explanation-step"><span>01</span><div><strong>选择原始报告</strong><p>报告包含公开结果、签名及签发者身份信息。</p></div></div><div class="explanation-step"><span>02</span><div><strong>验证内容与来源</strong><p>校验数字签名，检查报告内容是否与签发时一致。</p></div></div><div class="explanation-step"><span>03</span><div><strong>修改后再次验证</strong><p>编辑聚合结果，再运行验证，观察篡改是否被识别。</p></div></div><div class="small-note">签名有效证明内容与签发者绑定，不代表输入数据一定真实。</div></section><section class="panel verification-outcome" id="verification-outcome"><span class="outcome-symbol">◇</span><h3>等待验证</h3><p>载入报告，查看服务端返回的实际校验结果。</p></section></div></div><section class="panel checkpoint-panel" id="checkpoint-panel" hidden><div class="panel-heading"><div><h2>已签署审计检查点</h2></div></div><p class="panel-description">检查点绑定签署时的链头与记录数量，可用于后续比较与独立验证。</p><pre id="checkpoint-json"></pre></section></section>
 
       <section class="view" id="view-lab" hidden><div class="page-heading"><div><div class="eyebrow">TEST THE TRUST BOUNDARY</div><h1>安全实验室<span class="heading-dot">.</span></h1><p>触发受控负面场景，检验系统是否在对应保护层拒绝异常请求。</p></div><span class="mode-badge">受控本地实验</span></div><div class="info-banner"><span>ⓘ</span><p>每个实验运行真实校验流程。结果由服务端返回，关联事件可在证据中心查看。</p></div><div class="experiment-grid" id="experiment-grid"></div></section>
+      <section class="view" id="view-model-settings" hidden>
+        <div class="page-heading"><div><div class="eyebrow">CHOOSE YOUR COLLABORATION MODE</div><h1>模型设置<span class="heading-dot">.</span></h1><p>使用 Demo 开始实验，或接入自己的大模型服务。</p></div><span class="mode-badge" id="saved-model-mode">读取当前模式…</span></div>
+        <div class="model-settings-grid">
+          <section class="panel model-settings-panel">
+            <div class="panel-heading"><div><span class="section-index">01</span><h2>选择执行模式</h2></div><span class="model-settings-draft" id="model-settings-draft" hidden>有未保存的更改</span></div>
+            <form id="model-settings-form">
+              <fieldset class="model-settings-fields" id="model-settings-fields" disabled>
+                <legend class="sr-only">协作执行模式与模型配置</legend>
+                <div class="execution-mode-options">
+                  <label class="execution-mode-option"><input type="radio" name="execution-mode" id="settings-mode-demo" value="demo" checked><span class="mode-option-content"><span class="mode-option-title">Demo <span>本地演示</span></span><span class="mode-option-description">确定性编排，运行真实安全工具。无需 API Key。</span></span><span class="mode-option-mark" aria-hidden="true">✓</span></label>
+                  <label class="execution-mode-option"><input type="radio" name="execution-mode" id="settings-mode-llm" value="llm"><span class="mode-option-content"><span class="mode-option-title">API Token <span>外部大模型</span></span><span class="mode-option-description">使用自己的 API Key，启用规划与解释智能体。</span></span><span class="mode-option-mark" aria-hidden="true">✓</span></label>
+                </div>
+                <div class="demo-mode-note" id="demo-mode-note"><span aria-hidden="true">◇</span><p>Demo 模式可直接体验协作、加密传输、结果签名与审计验证，不调用外部模型。</p></div>
+                <fieldset class="api-model-fields" id="api-model-fields" hidden disabled>
+                  <legend class="sr-only">API Token 模型配置</legend>
+                  <label class="settings-field-label" for="model-provider">大模型提供商</label>
+                  <select id="model-provider" name="provider" required aria-describedby="model-endpoint-note"><option value="">正在读取提供商…</option></select>
+                  <p class="settings-field-hint endpoint-note" id="model-endpoint-note"></p>
+                  <div id="custom-model-endpoint" hidden>
+                    <label class="settings-field-label" for="model-base-url">API Base URL</label>
+                    <input class="settings-input" id="model-base-url" name="base_url" type="url" inputmode="url" autocomplete="url" spellcheck="false" placeholder="https://api.example.com/v1" aria-describedby="model-url-hint">
+                    <p class="settings-field-hint" id="model-url-hint">填写兼容 OpenAI Chat Completions 协议的服务地址。</p>
+                  </div>
+                  <label class="settings-field-label" for="model-name">模型名称</label>
+                  <input class="settings-input" id="model-name" name="model" type="text" maxlength="200" required autocomplete="off" spellcheck="false" placeholder="输入模型名称" aria-describedby="model-name-hint">
+                  <p class="settings-field-hint" id="model-name-hint">需支持 Chat Completions 工具调用，请填写账户可用的模型 ID。</p>
+                  <div class="settings-key-heading"><label class="settings-field-label" for="model-api-key">API Key</label><span class="credential-status" id="model-credential-status">尚未配置</span></div>
+                  <div class="settings-key-input"><input class="settings-input" id="model-api-key" name="api_key" type="password" autocomplete="new-password" spellcheck="false" autocapitalize="none" aria-describedby="model-key-hint"><button class="key-visibility-button" id="toggle-model-key" type="button" aria-controls="model-api-key" aria-pressed="false">显示</button></div>
+                  <p class="settings-field-hint" id="model-key-hint">请输入此提供商的 API Key。</p>
+                  <div class="model-call-notice"><span aria-hidden="true">ⓘ</span><p>保存仅更新配置。首次发起任务时才会调用外部模型，可能产生费用；模型会接收用户任务及工具返回的已批准摘要。</p></div>
+                </fieldset>
+                <div class="settings-form-actions"><button class="primary-button" id="save-model-settings" type="submit">保存并启用 <span aria-hidden="true">↗</span></button><span class="settings-save-note">设置对随后发起的任务生效</span></div>
+              </fieldset>
+            </form>
+            <div class="model-settings-feedback" id="model-settings-feedback" role="status" aria-live="polite">正在读取当前模型配置…</div>
+            <button class="secondary-button" id="retry-model-settings" type="button" hidden>重新读取配置 <span aria-hidden="true">↻</span></button>
+            <button class="clear-model-key-button" id="clear-model-key" type="button" hidden>清除已保存的 API Key，并切换为 Demo</button>
+          </section>
+          <aside class="model-settings-guide">
+            <section class="panel"><div class="panel-heading"><div><span class="section-index">02</span><h2>让模型参与协作</h2></div></div><div class="model-guide-step"><span>01</span><div><strong>选择服务与模型</strong><p>选择提供商，填写模型名称与该服务的 API Key。</p></div></div><div class="model-guide-step"><span>02</span><div><strong>保存并启用</strong><p>保存时不发送远程测试请求，页面会更新当前执行模式。</p></div></div><div class="model-guide-step"><span>03</span><div><strong>返回工作台发起任务</strong><p>规划与解释智能体参与任务编排，授权校验、密码学和结果验证仍由安全工具执行。</p></div></div><button class="secondary-button model-back-button" data-view="workspace">返回协作工作台 <span aria-hidden="true">↗</span></button></section>
+            <div class="model-security-note"><span aria-hidden="true">▣</span><p><strong>凭据只用于服务端调用</strong>保存后的 API Key 不会在页面回显。更换提供商或服务地址时，需要重新输入对应的 API Key。</p></div>
+          </aside>
+        </div>
+      </section>
       <footer class="page-footer"><span>VECTRA <span> / </span> TRUSTED MOBILITY LAB</span><span>面向车联网的多智能体可信数据协作与隐私保护系统</span></footer>
     </main>
   </div>

@@ -1,18 +1,21 @@
 """Local dashboard API. Browser session and same-origin controls are explicit."""
+import asyncio
 import hmac
 import json
 import secrets
+import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
 from .config import Settings
+from .model_settings import ModelSettingsError
 from .security import SecurityError
 from .service import CollaborationService
 
@@ -93,6 +96,10 @@ def create_app(settings=None, llm_transport=None):
     async def security_error(request, exc):
         return JSONResponse({"code": exc.code, "message": str(exc)}, status_code=403)
 
+    @app.exception_handler(ModelSettingsError)
+    async def model_settings_error(request, exc):
+        return JSONResponse({"detail": str(exc)}, status_code=exc.status_code)
+
     @app.get("/")
     def index():
         response = FileResponse(PACKAGE_WEB / "index.html")
@@ -113,6 +120,20 @@ def create_app(settings=None, llm_transport=None):
     def state(request: Request):
         return request.app.state.service.state()
 
+    @app.get("/api/model-settings")
+    def model_settings(request: Request):
+        return request.app.state.service.model_settings()
+
+    @app.put("/api/model-settings")
+    async def update_model_settings(request: Request):
+        # Do not use automatic validation here: its error objects may echo the
+        # secret-bearing input. Only constant validation messages are returned.
+        try:
+            body = await request.json()
+        except (ValueError, UnicodeError, RecursionError):
+            raise ModelSettingsError("模型设置必须是有效的 JSON 对象。") from None
+        return request.app.state.service.update_model_settings(body)
+
     @app.get("/api/evidence/analysis")
     def evidence_analysis(request: Request, event_id: int | None = None):
         return request.app.state.service.evidence_analysis(event_id=event_id)
@@ -120,12 +141,13 @@ def create_app(settings=None, llm_transport=None):
     @app.post("/api/tasks", status_code=202)
     def create_task(body: TaskRequest, request: Request):
         service = request.app.state.service
-        if len([t for t in service.tasks.list() if t["status"] in {"queued", "running"}]) >= 8:
-            raise HTTPException(429, "任务队列已满。")
-        task, created = service.tasks.create(body.model_dump())
-        if created:
-            service.audit.append("task_created", {"task_id": task["id"], "request_id": task["request_id"]})
-            request.app.state.executor.submit(service.execute, task["id"])
+        with service.submission_lock:
+            if len([t for t in service.tasks.list() if t["status"] in {"queued", "running"}]) >= 8:
+                raise HTTPException(429, "任务队列已满。")
+            task, created = service.tasks.create(body.model_dump())
+            if created:
+                service.audit.append("task_created", {"task_id": task["id"], "request_id": task["request_id"]})
+                request.app.state.executor.submit(service.execute, task["id"])
         return task
 
     @app.get("/api/tasks/{task_id}")
@@ -134,6 +156,37 @@ def create_app(settings=None, llm_transport=None):
         if not task:
             raise HTTPException(404, "任务不存在。")
         return task
+
+    @app.get("/api/tasks/{task_id}/stream")
+    async def task_stream(task_id: str, request: Request):
+        tasks = request.app.state.service.tasks
+        if await asyncio.to_thread(tasks.get, task_id) is None:
+            raise HTTPException(404, "任务不存在。")
+
+        async def snapshots():
+            # Send persisted snapshots so a reconnect recovers the complete
+            # execution history, including events emitted between connections.
+            # Fast stages may share one snapshot, but none of their steps vanish.
+            previous = None
+            heartbeat = time.monotonic()
+            while not await request.is_disconnected():
+                task = await asyncio.to_thread(tasks.get, task_id)
+                if task is None:
+                    return
+                encoded = json.dumps(task, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+                if encoded != previous:
+                    yield f"event: task\ndata: {encoded}\n\n"
+                    previous = encoded
+                    heartbeat = time.monotonic()
+                elif time.monotonic() - heartbeat >= 10:
+                    yield ": keep-alive\n\n"
+                    heartbeat = time.monotonic()
+                if task["status"] in {"completed", "failed"}:
+                    return
+                await asyncio.sleep(0.15)
+
+        return StreamingResponse(snapshots(), media_type="text/event-stream",
+                                 headers={"X-Accel-Buffering": "no", "Cache-Control": "no-store"})
 
     @app.post("/api/experiments")
     def experiment(body: ExperimentRequest, request: Request):
