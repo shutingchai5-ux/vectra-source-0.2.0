@@ -1,35 +1,27 @@
-name: Cross-platform verification
-
+name: TypeScript verification
 on:
   push:
   pull_request:
   workflow_dispatch:
-
 permissions:
   contents: read
-
 concurrency:
   group: verification-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-
 jobs:
   verify:
-    name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-latest, macos-latest]
-        python-version: ['3.11', '3.13']
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: oven-sh/setup-bun@v2
         with:
-          python-version: ${{ matrix.python-version }}
-      - name: Create a clean environment and install test dependencies
-        run: python run.py setup --test --no-init
-      - name: Test source, launcher, TLS, and real three-party MPC
-        run: python run.py test -- --basetemp .pytest-ci
-      - name: Create the transferable source archive
-        run: python run.py package --output dist/vectra-source-ci.zip
+          bun-version: 1.4.3
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run build
+      - run: bun test apps/server/tests

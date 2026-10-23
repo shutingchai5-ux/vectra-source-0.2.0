@@ -1,15 +1,13 @@
-.venv*/
-.vectra/
-runtime*/
-__pycache__/
-.pytest_cache/
-.pytest-*/
-.build-temp/
-.test-*/
-build/
 dist/
-*.egg-info/
-*.pyc
 .env
 *.log
-artifacts/*.json
+node_modules/
+apps/web/dist/
+runtime*/
+.env.local
+.env.*.local
+# Application diagnostics are intentionally versioned.
+!logs/
+!logs/**/
+!logs/**/*.jsonl
+!logs/**/*.md

@@ -1,14 +1,10 @@
-﻿#Requires -Version 5.1
-param(
-    [string]$Python = 'python',
-    [ValidateRange(1, 65535)][int]$Port
-)
+#Requires -Version 5.1
+param([ValidateRange(1024,65535)][int]$Port, [switch]$Dev)
 $ErrorActionPreference = 'Stop'
-$env:PYTHONIOENCODING = 'utf-8'
-[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
-$OutputEncoding = [Console]::OutputEncoding
-$launcher = Join-Path (Split-Path -Parent $PSScriptRoot) 'run.py'
-$launcherArguments = @($launcher, 'start')
-if ($PSBoundParameters.ContainsKey('Port')) { $launcherArguments += @('--port', "$Port") }
-& $Python @launcherArguments
-exit $LASTEXITCODE
+$root = Split-Path -Parent $PSScriptRoot
+Push-Location -LiteralPath $root
+try {
+    if ($PSBoundParameters.ContainsKey('Port')) { $env:VECTRA_PORT = [string]$Port }
+    if ($Dev) { & bun run dev } else { & bun run start }
+    exit $LASTEXITCODE
+} finally { Pop-Location }

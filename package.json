@@ -1,0 +1,43 @@
+{
+  "name": "vectra",
+  "version": "1.0.3",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.4.3",
+  "engines": {
+    "bun": ">=1.4.3"
+  },
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev": "bun scripts/dev.ts",
+    "dev:server": "bun --watch apps/server/src/index.ts",
+    "dev:web": "vite --config apps/web/vite.config.ts",
+    "build": "vite build --config apps/web/vite.config.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json && vue-tsc --noEmit -p apps/web/tsconfig.json",
+    "start": "bun apps/server/src/index.ts",
+    "stop": "bun scripts/stop.ts",
+    "test": "bun test apps/server/tests",
+    "check": "bun run typecheck && bun run build",
+    "package": "bun scripts/package.ts"
+  },
+  "dependencies": {
+    "@peculiar/x509": "2.2.0",
+    "canonicalize": "5.1.0",
+    "effect": "3.22.3",
+    "katex": "0.19.0",
+    "markdown-it": "15.0.3",
+    "pinia": "^3.0.4",
+    "reflect-metadata": "0.2.2",
+    "vue": "3.5.44",
+    "vue-router": "^4.6.3"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.3",
+    "@types/katex": "0.16.8",
+    "@types/markdown-it": "14.2.0",
+    "@vitejs/plugin-vue": "6.0.10",
+    "typescript": "~5.9.3",
+    "vite": "8.3.5",
+    "vue-tsc": "3.3.13"
+  }
+}
