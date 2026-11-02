@@ -5,8 +5,9 @@ import { PARTICIPANTS, error, type Aggregate, type SignedEnvelope, type StepKind
 import { Security, canonical, unseal } from "../security";
 import { signingSections } from "../protocol";
 import type { Trace } from "../transport";
-import { validateQuery } from "../statistics";
+import { validateQuery, validateStatisticsOutput } from "../statistics";
 import { resolveStepPhase } from "@vectra/shared";
+import { statisticsFrames } from "@vectra/shared";
 
 export class MpcRunner {
   private active = false;
@@ -64,9 +65,9 @@ export class MpcRunner {
                   recipient: typeof message.recipient === "string" && [...PARTICIPANTS, "mpc"].includes(message.recipient) ? message.recipient : "mpc", protocol: "TLS 1.3 / Shamir m=3 t=1", metadata: { source: "worker" },
                   protocolDetails: message.protocolDetails as ProtocolDetails | undefined, ...(privateDetails ? { privateDetails } : {}) });
               } else if (message.type === "result") {
-                if (id !== "vehicle-a") throw error("mpc_protocol", "非授权节点尝试输出。", 403);
+                if (id !== "carrier-a") throw error("mpc_protocol", "非授权节点尝试输出。", 403);
                 results.push(message.envelope as SignedEnvelope);
-              } else if (message.type === "failed") throw error("mpc_party_failed", "参与节点未完成真实三方协议。", 503);
+              } else if (message.type === "failed") throw error("mpc_party_failed", "承运商协作节点未完成真实三方协议。", 503);
               else throw error("mpc_protocol", "收到未批准的工作进程消息。", 500);
             }
           }
@@ -74,22 +75,25 @@ export class MpcRunner {
         readers.push(reader); void reader.catch(rejectProtocol);
         // Drain diagnostics without persisting possible input or credential material.
         void new Response(child.stderr).text();
-        void child.exited.then(code => { if (code !== 0) rejectProtocol(error("mpc_party_failed", "参与节点异常退出。", 503)); });
+        void child.exited.then(code => { if (code !== 0) rejectProtocol(error("mpc_party_failed", "承运商协作节点异常退出。", 503)); });
       }
       await Promise.race([(async () => { while (!finished && Object.keys(peers).length < 3) await Bun.sleep(10); })(), failed]);
-      trace({ phase: 4, agent: "隐私计算执行器", action: "三方进程端点就绪", kind: "exchange", protocol: "Bun 子进程 / stdin", detail: "三个独立进程已分别报告真实监听端口，执行器将公开端点映射发送给每个参与者。",
+      trace({ phase: 4, agent: "coordinator", action: "三方进程端点就绪", kind: "exchange", protocol: "Bun 子进程 / stdin", detail: "三个独立进程已分别报告真实监听端口，园区协调 Agent 将公开端点映射发送给每个参与者。",
         protocolDetails: { objective: "启动真实三方协议。", operations: ["启动三个独立 Bun 进程，不继承模型凭据。", "等待全部 ready 消息。", "向各进程 stdin 发送端点表。"], sections: [{ title: "实际进程及端点", data: PARTICIPANTS.map((id, index) => ({ id, pid: children[index].pid, host: "127.0.0.1", port: peers[id] })) }] } });
       for (const child of children) { child.stdin.write(JSON.stringify(peers) + "\n"); child.stdin.end(); }
       await Promise.race([Promise.all([...readers, ...children.map(child => child.exited)]), failed]);
       if (results.length !== 1) throw error("mpc_output_missing", "三方协议未返回唯一批准输出。", 503);
-      const payload = this.security.verify(results[0], "vehicle-a");
-      const query = validateQuery(task.payload.statistics), groups = payload.groups as RoadStatistics[];
-      if (payload.taskId !== task.payload.taskId || payload.requestDigest !== task.payload.requestDigest || payload.road !== task.payload.road || payload.windowSeconds !== task.payload.windowSeconds || payload.datasetVersion !== task.payload.datasetVersion || canonical(payload.query) !== canonical(query) || payload.participantCount !== 3 || !Array.isArray(groups) || groups.length !== query.roads.length || groups.some((g, i) => g.road !== query.roads[i] || !Array.isArray(g.metrics) || g.metrics.length !== query.metrics.length || g.metrics.some((m, j) => m.label !== query.metrics[j].label || m.value !== null && (typeof m.value !== "number" || !Number.isFinite(m.value)) || !Number.isSafeInteger(m.validSamples) || m.validSamples < 0 || m.validSamples > 6000))) throw error("mpc_output_invalid", "批准输出与任务绑定或范围不一致。", 403);
-      trace({ phase: 6, agent: "隐私计算执行器", action: "复核三方输出签名与绑定", kind: "security", protocol: "Ed25519 / 任务绑定", detail: "工作进程全部完成且输出唯一，vehicle-a 签名、请求摘要及统计范围校验通过。",
-        protocolDetails: { objective: "防止协调端接受伪造或跨任务输出。", operations: ["要求三个进程正常结束且仅 vehicle-a 输出一次。", "用登记公钥验证输出 Ed25519 签名。", "比较任务、请求摘要、路段、窗口、人数和数值范围。"], sections: signingSections(this.security, results[0]), checks: [{ name: "唯一合法输出及完整绑定", status: "passed" }] } });
+      const payload = this.security.verify(results[0], "carrier-a");
+      const query = validateQuery(task.payload.statistics), groups = validateStatisticsOutput(payload.groups, query);
+      if (query.dataset === "park_visits" && canonical(payload.parkContext) !== canonical(task.payload.parkContext)) throw error("mpc_output_invalid", "园区及承运商输出绑定不一致。", 403);
+      if (query.dataset === "reservation_plans" && (canonical(payload.parkContext) !== canonical(task.payload.parkContext) ||
+        canonical(payload.reservationContext) !== canonical(task.payload.reservationContext))) throw error("mpc_output_invalid", "预约计划、容量与签名任务绑定不一致。", 403);
+      if (payload.taskId !== task.payload.taskId || payload.requestDigest !== task.payload.requestDigest || payload.road !== task.payload.road || payload.windowSeconds !== task.payload.windowSeconds || payload.datasetVersion !== task.payload.datasetVersion || canonical(payload.query) !== canonical(query) || payload.participantCount !== 3 || groups.length !== statisticsFrames(query).length) throw error("mpc_output_invalid", "批准输出与任务绑定或范围不一致。", 403);
+      trace({ phase: 6, agent: "coordinator", action: "复核三方输出签名与绑定", kind: "security", protocol: "Ed25519 / 任务绑定", detail: "工作进程全部完成且输出唯一，carrier-a 签名、请求摘要及统计范围校验通过。",
+        protocolDetails: { objective: "防止园区协调 Agent 接受伪造或跨任务输出。", operations: ["要求三个进程正常结束且仅 carrier-a 输出一次。", "用登记公钥验证输出 Ed25519 签名。", "比较任务、请求摘要、路段、窗口、人数和数值范围。"], sections: signingSections(this.security, results[0]), checks: [{ name: "唯一合法输出及完整绑定", status: "passed" }] } });
       const meanIndex = query.metrics.findIndex(m => m.operation === "mean" && m.field === "speed" && !m.filter);
       const averageSpeed = groups.length === 1 && meanIndex >= 0 ? groups[0].metrics[meanIndex].value : null;
-      return { road: String(payload.road), windowSeconds: Number(payload.windowSeconds), ...(averageSpeed === null ? {} : { averageSpeed }), query, groups, datasetVersion: String(payload.datasetVersion), participantCount: 3, protocol: "Shamir vector m=3 t=1 / TLS 1.3" };
+      return { road: String(payload.road), windowSeconds: Number(payload.windowSeconds), ...(averageSpeed === null ? {} : { averageSpeed }), ...(task.payload.parkContext ? { parkContext: task.payload.parkContext as unknown as Aggregate["parkContext"] } : {}), ...(query.dataset === "reservation_plans" ? { reservationContext: task.payload.reservationContext as unknown as Aggregate["reservationContext"] } : {}), query, groups, datasetVersion: String(payload.datasetVersion), participantCount: 3, protocol: "Shamir vector m=3 t=1 / TLS 1.3" };
     } finally {
       finished = true;
       clearTimeout(timer); signal.removeEventListener("abort", abort);

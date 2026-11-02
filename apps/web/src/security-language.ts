@@ -1,4 +1,6 @@
 import type MarkdownIt from "markdown-it";
+import { normalizeSystemTerms } from "@vectra/shared";
+import { currentParkSettings, registeredIdentities } from "./park-state";
 
 // Names follow RFC 8446, RFC 8785, RFC 8032 and NIST SP 800-38D.
 // Ed25519, X.509 and Shamir are algorithm/standard names, not invented acronym expansions.
@@ -14,7 +16,6 @@ export const securityNames: Record<string, string> = {
   HTTP: "HTTP（Hypertext Transfer Protocol，超文本传输协议）",
   JCS: "JCS（JSON Canonicalization Scheme，JSON 规范化方案）",
   MPC: "MPC（Multi-Party Computation，多方计算）",
-  RSU: "RSU（Roadside Unit，路侧单元）",
   LLM: "LLM（Large Language Model，大语言模型）",
   Ed25519: "Ed25519（Edwards-curve Digital Signature Algorithm，爱德华兹曲线数字签名算法的 edwards25519 实例）",
   "X.509": "X.509（公钥证书标准）",
@@ -28,13 +29,15 @@ export const securityNames: Record<string, string> = {
 const terms = Object.keys(securityNames).sort((a, b) => b.length - a.length).map(name => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
 const termPattern = new RegExp(`(?<![A-Za-z0-9_/-])(${terms.join("|")})(?![A-Za-z0-9_-])`, "g");
 const serviceNames: Record<string, string> = {
-  compute_statistics: "执行批准的车辆统计", investigate: "调查本轮证据", query_events: "查询实际审计事件",
+  delegate_statistics_planning: "委派统计规划", delegate_analysis: "委派运营与证据分析", get_park_overview: "查看园区数据概况", search_memory: "检索主智能体长期记忆", remember_memory: "记住用户明确要求", search_task_history: "查找历史任务",
+  compute_statistics: "执行承运商联合统计", investigate: "调查本轮证据", query_events: "查询实际审计事件",
   submit_analysis: "提交并检查分析结论", verify_latest_report: "验证当前对话最近的报告", identity_status: "查看参与者登记身份", submit_statistics_plan: "提交并检查统计方案",
 };
 const servicePattern = new RegExp(`(?<![A-Za-z0-9_/-])(${Object.keys(serviceNames).join("|")})(?![A-Za-z0-9_/-])`, "g");
 const proseTerms: Record<string, string> = { "执行契约": "本轮交付要求", "工具调用": "服务执行请求", "工具产物": "服务实际返回的结果", "受控统计语言": "系统支持的统计规则", "统计向量": "按固定顺序排列的统计量" };
 export function userFacingProse(text: string): string {
-  let result = text.replace(servicePattern, name => serviceNames[name]);
+  const names = [...registeredIdentities.value.map(node => node.displayName ?? ""), currentParkSettings.value.name, ...currentParkSettings.value.carriers.map(carrier => carrier.name)];
+  let result = normalizeSystemTerms(text, names).replace(servicePattern, name => serviceNames[name]);
   for (const [technical, readable] of Object.entries(proseTerms)) result = result.replaceAll(technical, readable);
   return result;
 }
@@ -65,7 +68,7 @@ export function installSecurityLanguage(md: InstanceType<typeof MarkdownIt>) {
           if (children[next].type === "text") following = children[next].content;
           break;
         }
-        token.content = userFacingProse(expandSecurityNames(token.content, following));
+        token.content = expandSecurityNames(userFacingProse(token.content), following);
       }
     }
   });

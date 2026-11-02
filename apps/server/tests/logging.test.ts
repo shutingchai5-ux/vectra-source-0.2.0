@@ -54,7 +54,7 @@ test("JSONL keeps one record per line and provider failures retain HTTP diagnost
     expect(records(root, "conversations")).toHaveLength(1);
     expect(records(root, "conversations")[0].content).toContain("[REDACTED]");
     globalThis.fetch = Object.assign(async () => new Response("provider-body-must-not-be-logged", { status: 401 }), { preconnect: original.preconnect });
-    await expect(Effect.runPromise(runAgent({ mode: "llm", provider: "custom", baseUrl: "https://example.invalid/v1", model: "test", apiKey: "provider-test-key-928" }, "公开提问", [], {}, () => {}, new AbortController().signal, "test", (event, detail, level) => { logs.operation(event, detail, level); }))).rejects.toThrow();
+    await expect(Effect.runPromise(runAgent({ mode: "llm", provider: "custom", baseUrl: "https://example.invalid/v1", model: "test", apiKey: "provider-test-key-928" }, "公开提问", [], {}, () => {}, new AbortController().signal, "coordinator", (event, detail, level) => { logs.operation(event, detail, level); }))).rejects.toThrow();
     const operations = records(root, "operations");
     expect(operations.some(entry => entry.event === "model.http_response" && entry.status === 401)).toBeTrue();
     expect(operations.some(entry => entry.event === "model.request_failed" && entry.error.status === 401)).toBeTrue();

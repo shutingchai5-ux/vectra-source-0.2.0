@@ -2,13 +2,20 @@ import { Effect } from "effect";
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { randomBytes, timingSafeEqual, randomUUID } from "node:crypto";
 import { extname, join, resolve } from "node:path";
-import { error, asError, decode, CreateTaskSchema, ClientLogsSchema, type PublicEvent } from "@vectra/shared";
+import { error, asError, decode, CreateTaskSchema, ClientLogsSchema, VERSION, isLlmAgentId, type PublicEvent } from "@vectra/shared";
 import { config } from "./config";
 import { Collaboration } from "./service";
 import { atomicWrite } from "./security";
+import { CarrierRoles } from "./carrier-role";
+import { readReservationCatalog } from "./reservations";
+import { PortalAuth } from "./portal-auth";
 
 export async function startServer(options = config()) {
   const app = await Collaboration.open(options);
+  const carrierRoles = new CarrierRoles(app.store.db);
+  const portalAuth=options.deployment?new PortalAuth(app.store.db,options.deployment):undefined;
+  const portalInfo=(request:Request)=>({role:"park",identity:"coordinator",username:options.deployment?.username??"",authenticated:portalAuth?portalAuth.authenticated(request):true,legacy:!portalAuth,settings:app.park.catalog().settings,
+    companyLinks:options.deployment?[{id:"companies",name:"企业端",url:options.deployment!.publicPeers?.["carrier-a"]??""}]:[]});
   const sessionFile = join(options.dataDir, "session.key");
   if (!existsSync(sessionFile)) writeFileSync(sessionFile, randomBytes(32).toString("base64url"), { mode: 0o600 });
   const session = readFileSync(sessionFile, "utf8");
@@ -55,25 +62,170 @@ export async function startServer(options = config()) {
   }
   async function route(request: Request, requestId: string): Promise<Response> {
     const url = new URL(request.url), path = url.pathname, method = request.method;
-    if (!["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)) throw error("host_forbidden", "仅允许本机访问。", 403);
-    if (path === "/api/health") return json({ status: stopping ? "stopping" : "ready", version: "1.0.3", instanceId });
+    if (!["127.0.0.1", "localhost", "[::1]",...(options.deployment?[new URL(options.deployment.publicUrl).hostname]:[])].includes(url.hostname)) throw error("host_forbidden", "访问主机不属于本部署。", 403);
+    if (path === "/api/health") return json({ status: stopping ? "stopping" : "ready", version: VERSION, instanceId });
+    if(path==="/api/portal"&&method==="GET")return json(portalInfo(request));
+    if(path==="/api/portal/login"&&method==="POST"&&portalAuth){const cookie=await portalAuth.login(request,await body(request,4096));return new Response(JSON.stringify({...portalInfo(request),authenticated:true}),{headers:{"Content-Type":"application/json","Set-Cookie":cookie}});}
+    if(path==="/api/portal/logout"&&method==="POST"&&portalAuth)return new Response("{}",{headers:{"Content-Type":"application/json","Set-Cookie":portalAuth.logout(request)}});
     if (path === "/api/control/shutdown" && method === "POST") {
       const value = request.headers.get("x-vectra-control") || "";
       if (Buffer.byteLength(value) !== Buffer.byteLength(controlToken) || !timingSafeEqual(Buffer.from(value), Buffer.from(controlToken))) throw error("control_forbidden", "服务控制凭据无效。", 403);
       const origin = request.headers.get("origin"); if (origin && origin !== url.origin) throw error("origin_forbidden", "跨来源控制被拒绝。", 403);
       setTimeout(() => { void close(); }, 50); return json({ stopping: true }, 202);
     }
-    if (path === "/api/session" && method === "GET") return new Response(JSON.stringify({ ready: true }), { headers: { "Content-Type": "application/json", "Set-Cookie": `vectra_session=${session}; Path=/; HttpOnly; SameSite=Strict; Max-Age=43200` } });
+    if (path === "/api/session" && method === "GET") {portalAuth?.require(request);return new Response(JSON.stringify({ ready: true }), { headers: { "Content-Type": "application/json", "Set-Cookie": `vectra_session=${session}; Path=/; HttpOnly; SameSite=Strict; Max-Age=43200` } });}
     if (path.startsWith("/api/")) {
       const cookie = request.headers.get("cookie")?.split(";").map(s => s.trim()).find(s => s.startsWith("vectra_session="))?.slice("vectra_session=".length) ?? "";
-      if (Buffer.byteLength(cookie) !== Buffer.byteLength(session) || !timingSafeEqual(Buffer.from(cookie), Buffer.from(session))) throw error("session_required", "请打开工作台以建立本机会话。", 401);
+      if(portalAuth)portalAuth.require(request);
+      else if (Buffer.byteLength(cookie) !== Buffer.byteLength(session) || !timingSafeEqual(Buffer.from(cookie), Buffer.from(session))) throw error("session_required", "请打开工作台以建立本机会话。", 401);
       if (!["GET", "HEAD"].includes(method)) {
         const origin = request.headers.get("origin");
         if (origin && origin !== url.origin) throw error("origin_forbidden", "跨来源写入被拒绝。", 403);
         const site = request.headers.get("sec-fetch-site"); if (site && !["same-origin", "none"].includes(site)) throw error("origin_forbidden", "跨来源写入被拒绝。", 403);
       }
       if (stopping) throw error("service_stopping", "服务正在停止，请稍后重连。", 503);
+      if(portalAuth&&(path.startsWith("/api/carrier")||path==="/api/park/records"||path.startsWith("/api/telemetry")||path==="/api/fleet"&&method!=="GET"||path==="/api/park"&&method==="POST"))throw error("portal_forbidden","企业私有数据请在对应企业端维护，园区仅接收批准的联合结果。",403);
+      if(path==="/api/charging-capacity"&&app.federation){
+        if(method==="GET")return json(app.federation.charge());
+        if(method==="PUT"){const data=await body(request,4*1024*1024);if(!data||typeof data!=="object"||Array.isArray(data)||Object.keys(data).some(key=>!["slots","baseVersion"].includes(key)))throw error("invalid_request","充电容量字段无效。",422);const capacity=app.federation.saveCharge(data);app.audit.append("charging_capacity_saved",{datasetVersion:capacity.version,rowCount:capacity.slots.length});return json(capacity);}
+      }
+      if(path==="/api/business/catalogs"&&method==="GET"&&app.federation)return json((await app.federation.refresh()).business);
       if (path === "/api/overview" && method === "GET") return json(app.overview());
+      if (path === "/api/identities" && method === "GET") return json(app.security.nodes());
+      if (path.startsWith("/api/carrier")) {
+        const origin = request.headers.get("origin"), site = request.headers.get("sec-fetch-site");
+        if (origin && origin !== url.origin || site && !["same-origin", "none"].includes(site)) throw error("origin_forbidden", "承运商角色资料仅允许本机同源页面访问。", 403);
+      }
+      if (path === "/api/carrier-role") {
+        if (method === "POST") { const role = carrierRoles.select(await body(request)); app.logs.remember(role.token); app.logs.operation("carrier.role_selected", { carrierId: role.carrierId, requestId }); return json(role); }
+        if (method === "GET") return json(carrierRoles.require(request.headers));
+      }
+      if (path === "/api/carrier/fleet" && method === "GET") { const role = carrierRoles.require(request.headers); return json(app.fleet.forCarrier(role.carrierId)); }
+      if (path === "/api/carrier/reservations/versions" && method === "GET") { const role = carrierRoles.require(request.headers); return json(app.reservations.versions(role.carrierId)); }
+      if (path === "/api/carrier/reservations") {
+        const role = carrierRoles.require(request.headers);
+        if (method === "GET") return json(app.reservations.forCarrier(role.carrierId, url.searchParams.get("version") ?? undefined));
+        if (method === "PUT") {
+          const data = await body(request, 4 * 1024 * 1024);
+          if (!data || typeof data !== "object" || Array.isArray(data) || Object.keys(data).some(key => !["slots", "baseVersion"].includes(key)))
+            throw error("invalid_reservation", "请提交本方预约时段和当前版本。", 422);
+          const snapshot = app.reservations.replaceCarrier(role.carrierId, data.slots, data.baseVersion);
+          app.audit.append("reservation_plans_saved", { carrierId: role.carrierId, datasetVersion: snapshot.version, rowCount: snapshot.slots.length });
+          return json(snapshot);
+        }
+      }
+      if (path === "/api/carrier/visits/queue" && method === "POST") {
+        const data = await body(request), role = carrierRoles.require(request.headers);
+        if (data && typeof data === "object" && !Array.isArray(data)) app.fleet.assertVisitOwners([{ ...data, carrierId: role.carrierId }]);
+        const previousVersion = app.park.catalog().version, snapshot = app.park.queueCarrier(role.carrierId, data);
+        if (snapshot.version !== previousVersion) app.audit.append("park_queue_registered", { carrierId: role.carrierId, datasetVersion: snapshot.version, visitCount: snapshot.catalog.visitCount });
+        return json(snapshot, 201);
+      }
+      if (path === "/api/carrier/visits/admissions" && method === "POST") {
+        const data = await body(request), role = carrierRoles.require(request.headers);
+        if (data && typeof data === "object" && !Array.isArray(data)) app.fleet.assertVisitOwners([{ ...data, carrierId: role.carrierId }]);
+        const snapshot = app.park.admitCarrier(role.carrierId, data);
+        app.audit.append("park_admission_confirmed", { carrierId: role.carrierId, datasetVersion: snapshot.version, visitCount: snapshot.catalog.visitCount });
+        return json(snapshot, 201);
+      }
+      if (path === "/api/carrier/visits/import" && method === "POST") {
+        const data = await body(request, 4 * 1024 * 1024), role = carrierRoles.require(request.headers);
+        if (!data || typeof data !== "object" || Array.isArray(data) || Object.keys(data).some(key => !["visits", "baseVersion"].includes(key)) || !Array.isArray(data.visits)) throw error("invalid_park_data", "请提供需要追加的本方车次及当前版本。", 422);
+        if (data.visits.some((row: unknown) => !row || typeof row !== "object" || !("carrierId" in row) || row.carrierId !== role.carrierId)) throw error("carrier_scope_forbidden", "只能导入当前承运商的车次。", 403);
+        app.fleet.assertVisitOwners(data.visits); const snapshot = app.park.appendCarrier(role.carrierId, data.visits, data.baseVersion);
+        app.audit.append("park_visits_appended", { carrierId: role.carrierId, datasetVersion: snapshot.version, importedCount: data.visits.length }); return json(snapshot, 201);
+      }
+      const carrierVisit = path.match(/^\/api\/carrier\/visits\/([^/]+)(?:\/(lifecycle))?$/);
+      if (carrierVisit && (carrierVisit[2] === "lifecycle" && method === "POST" || !carrierVisit[2] && method === "PUT")) {
+        const data = await body(request), role = carrierRoles.require(request.headers);
+        const visitId = decodeURIComponent(carrierVisit[1]);
+        const snapshot = carrierVisit[2] ? app.park.advanceCarrier(role.carrierId, visitId, data) : app.park.correctCarrier(role.carrierId, visitId, data);
+        app.audit.append(carrierVisit[2] ? "park_lifecycle_recorded" : "park_visit_corrected", { carrierId: role.carrierId, datasetVersion: snapshot.version }); return json(snapshot);
+      }
+      if (path === "/api/carrier/visits") {
+        if (method === "GET") { const role = carrierRoles.require(request.headers); return json(app.park.forCarrier(role.carrierId)); }
+        if (method === "POST") {
+          const data = await body(request, 4 * 1024 * 1024), role = carrierRoles.require(request.headers);
+          if (!data || typeof data !== "object" || Array.isArray(data) || Object.keys(data).some(key => !["visits", "baseVersion"].includes(key))) throw error("invalid_park_data", "请提交本承运商车次和当前数据版本。", 422);
+          if (!Array.isArray(data.visits) || data.visits.some((row: unknown) => !row || typeof row !== "object" || !("carrierId" in row) || row.carrierId !== role.carrierId)) throw error("carrier_scope_forbidden", "当前角色只能保存本承运商的车次。", 403);
+          app.fleet.assertVisitOwners(data.visits); const catalog = app.park.importCarrier(role.carrierId, data.visits, data.baseVersion);
+          app.audit.append("park_visits_imported", { carrierId: role.carrierId, datasetVersion: catalog.version, visitCount: catalog.visitCount, vehicleCount: catalog.vehicleCount }); return json(catalog, 201);
+        }
+      }
+      if (path.startsWith("/api/agents")) {
+        const origin = request.headers.get("origin"), site = request.headers.get("sec-fetch-site");
+        if (origin && origin !== url.origin || site && !["same-origin", "none"].includes(site)) throw error("origin_forbidden", "Agent 配置与记忆仅允许本机同源页面访问。", 403);
+        if (path === "/api/agents" && method === "GET") return json(app.agents.list());
+        const selected = path.match(/^\/api\/agents\/([\w-]+)(?:\/(model-settings|memories|memory-settings)(?:\/([\w-]+))?)?$/);
+        if (!selected || !isLlmAgentId(selected[1])) throw error("agent_unknown", "未找到已登记的 LLM 智能体。", 404);
+        const id = selected[1], section = selected[2], memoryId = selected[3];
+        if (!section && method === "GET") return json(app.agents.detail(id));
+        if (section === "model-settings" && !memoryId) {
+          if (method === "GET") return json(app.agents.model(id));
+          if (method === "PUT") { const next = app.agents.configureModel(id, await body(request)); for (const model of Object.values(app.agents.models())) app.logs.remember(model.apiKey); app.logs.operation("agent.model_settings_saved", { agent: id, model: next.model, inherited: next.inherited, requestId }); return json(next); }
+        }
+        if (section === "memories" || section === "memory-settings") {
+          if (id !== "coordinator") throw error("memory_not_available", "仅主智能体拥有长期记忆；子智能体只接收本次委派所需上下文。", 403);
+          const memory = app.agents.memory;
+          if (section === "memory-settings" && !memoryId) {
+            if (method === "GET") return json(memory.settings());
+            if (method === "PUT") { const next = memory.configure(await body(request)); app.logs.operation("agent.memory_settings_saved", { ...next, requestId }); return json(next); }
+          }
+          if (section === "memories") {
+            if (!memoryId && method === "GET") return json(memory.list((url.searchParams.get("q") ?? "").slice(0, 200)));
+            if (!memoryId && method === "POST") { const item = memory.save(await body(request)); app.logs.operation("agent.memory_saved", { agent: id, memoryId: item.id, source: "manual", requestId }); return json(item, 201); }
+            if (memoryId && method === "PUT") { const item = memory.save(await body(request), memoryId); app.logs.operation("agent.memory_updated", { agent: id, memoryId: item.id, requestId }); return json(item); }
+            if (memoryId && method === "DELETE") { const data = await body(request); if (!data || typeof data !== "object" || Array.isArray(data) || Object.keys(data).length !== 1 || !("revision" in data)) throw error("invalid_memory", "请提供记忆的当前版本。", 422); memory.remove(memoryId, data.revision); app.logs.operation("agent.memory_deleted", { agent: id, memoryId, requestId }); return json({ deleted: true }); }
+          }
+        }
+        throw error("not_found", "未找到此 Agent 操作。", 404);
+      }
+      if (path === "/api/fleet" && method === "GET") {
+        const origin = request.headers.get("origin"), site = request.headers.get("sec-fetch-site");
+        if (origin && origin !== url.origin || site && !["same-origin", "none"].includes(site)) throw error("origin_forbidden", "车辆资料仅允许本机同源页面读取。", 403);
+        return json(app.federation?await app.federation.fleet():app.fleet.overview());
+      }
+      if (path === "/api/fleet" && method === "POST") {
+        const data = await body(request, 4 * 1024 * 1024);
+        const role = carrierRoles.require(request.headers);
+        if (!data || typeof data !== "object" || Array.isArray(data) || Object.keys(data).some(key => !["carrierId", "vehicles", "baseVersion"].includes(key))) throw error("invalid_vehicle", "请提交承运商、完整车辆列表与当前档案版本。", 422);
+        if (data.carrierId !== role.carrierId) throw error("carrier_scope_forbidden", "当前角色只能为本承运商添加和修改车辆档案。", 403);
+        app.fleet.save(role.carrierId, data.vehicles, data.baseVersion, true); const overview = app.fleet.forCarrier(role.carrierId);
+        app.audit.append("carrier_vehicles_saved", { carrierId: data.carrierId, vehicleCount: overview.vehicles.filter(v => v.profiled && v.carrierId === data.carrierId).length, fleetVersion: overview.version });
+        return json(overview, 201);
+      }
+      if (path === "/api/park" && method === "GET") return json(app.park.catalog());
+      if (path === "/api/reservations/versions" && method === "GET") return json(app.reservations.versions());
+      if (path === "/api/reservations" && method === "GET") {
+        const version = url.searchParams.get("version");
+        return json(version ? readReservationCatalog(app.security, version) : app.reservations.catalog());
+      }
+      if (path === "/api/reservations/capacity" && method === "PUT") {
+        const data = await body(request, 4 * 1024 * 1024);
+        if (!data || typeof data !== "object" || Array.isArray(data) || Object.keys(data).some(key => !["capacitySlots", "baseVersion"].includes(key)))
+          throw error("invalid_reservation", "请提交园区容量时段和当前版本。", 422);
+        const catalog = app.reservations.replaceCapacity(data.capacitySlots, data.baseVersion);
+        app.audit.append("reservation_capacity_saved", { datasetVersion: catalog.version, rowCount: catalog.capacitySlots.length });
+        return json(catalog);
+      }
+      if (path === "/api/park/records" && method === "GET") {
+        const origin = request.headers.get("origin"), site = request.headers.get("sec-fetch-site");
+        if (origin && origin !== url.origin || site && !["same-origin", "none"].includes(site)) throw error("origin_forbidden", "承运商车次原始记录仅允许本机同源页面读取。", 403);
+        return json(app.park.snapshot());
+      }
+      if ((path === "/api/park" && method === "POST") || (path === "/api/park/settings" && method === "PUT")) {
+        const data = await body(request, 4 * 1024 * 1024), setting = path.endsWith("/settings");
+        if (!data || typeof data !== "object" || Array.isArray(data) || Object.keys(data).some(key => ![setting ? "settings" : "visits", "baseVersion"].includes(key)) || typeof data.baseVersion !== "string") throw error("invalid_park_data", "请提交完整车次 visits 或园区 settings，以及当前 baseVersion。", 422);
+        const role = setting ? undefined : carrierRoles.require(request.headers);
+        if (!setting) {
+          if (!Array.isArray(data.visits) || data.visits.some((row: unknown) => !row || typeof row !== "object" || !("carrierId" in row) || row.carrierId !== role!.carrierId)) throw error("carrier_scope_forbidden", "当前角色只能保存本承运商的车次。", 403);
+          app.fleet.assertVisitOwners(data.visits);
+        }
+        const catalog = setting ? app.park.configure(data.settings, data.baseVersion) : app.park.importCarrier(role!.carrierId, data.visits, data.baseVersion);
+        if (setting) { app.security.configureIdentities(catalog.settings); app.reservations.refreshSettings(); }
+        app.audit.append(setting ? "park_settings_saved" : "park_visits_imported", { datasetVersion: catalog.version, roadCount: catalog.roads.length, visitCount: catalog.visitCount, vehicleCount: catalog.vehicleCount, completedCount: catalog.completedCount, carrierCount: 3 });
+        return json(catalog, 201);
+      }
       if (path === "/api/telemetry" && method === "GET") return json(app.telemetry.catalog());
       if (path === "/api/telemetry/records" && method === "GET") {
         const origin = request.headers.get("origin"), site = request.headers.get("sec-fetch-site");
@@ -82,8 +234,9 @@ export async function startServer(options = config()) {
       }
       if (path === "/api/telemetry" && method === "POST") {
         const data = await body(request, 2 * 1024 * 1024);
+        const role = carrierRoles.require(request.headers);
         if (!Array.isArray(data) && (!data || typeof data !== "object" || Object.keys(data).some(key => !["records", "baseVersion"].includes(key)) || typeof data.baseVersion !== "string" || !Array.isArray(data.records))) throw error("invalid_telemetry", "导入须为记录数组或包含 records、baseVersion 的编辑快照。", 422);
-        const catalog = Array.isArray(data) ? app.telemetry.import(data) : app.telemetry.import(data.records, data.baseVersion);
+        const catalog = Array.isArray(data) ? app.telemetry.importCarrier(role.carrierId, data) : app.telemetry.importCarrier(role.carrierId, data.records, data.baseVersion);
         app.audit.append("telemetry_imported", { datasetVersion: catalog.version, roadCount: catalog.roads.length, sampleCount: catalog.sampleCount, vehicleCount: catalog.vehicleCount });
         return json(catalog, 201);
       }
@@ -180,7 +333,7 @@ export async function startServer(options = config()) {
       return new Response(response.body, { status: response.status, headers });
     },
   }); } catch (cause) { app.logs.operation("server.listen_failed", { host: options.host, port: options.port, error: cause }, "error"); await app.close(); throw error("listen_failed", "服务端口无法监听，请检查是否已有服务运行。", 503, cause); }
-  app.logs.operation("server.listening", { host: options.host, port: server.port, dev: options.dev, version: "1.0.3" });
+  app.logs.operation("server.listening", { host: options.host, port: server.port, dev: options.dev, version: VERSION });
   atomicWrite(controlPath, JSON.stringify({ instanceId, port: server.port, host: options.host, token: controlToken, pid: process.pid }));
   async function close() {
     if (stopping) return; stopping = true; for (const closeFeed of [...feeds]) closeFeed(); server.stop(); await app.close();

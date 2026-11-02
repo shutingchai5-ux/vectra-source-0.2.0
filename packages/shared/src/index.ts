@@ -4,12 +4,27 @@ export { TIME_ZONE, shanghaiTime, shanghaiDay, shanghaiDayIndex, shanghaiTimesta
 export * from "./statistics";
 export * from "./workflow";
 export * from "./model-options";
-import type { ThinkingProtocol } from "./model-options";
+export * from "./park";
+export * from "./operations";
+export * from "./business";
+export * from "./federation";
+export * from "./identities";
+export * from "./terms";
+export * from "./fleet";
+export * from "./license-plate";
+export * from "./agents";
+export * from "./carrier-role";
+import type { IdentityProfile } from "./identities";
+import type { ParkContext, ParkSettings } from "./park";
+import type { ModelApiFormat, ThinkingProtocol } from "./model-options";
 import type { ConversationPhase } from "./workflow";
 import type { StatisticsQuery, RoadStatistics } from "./statistics";
+import type { ReservationContext, CoordinationResult } from "./operations";
+import type { BusinessContext } from "./business";
+import type { FederationManifest } from "./federation";
 
-export const VERSION = "1.0.3";
-export const PARTICIPANTS = ["vehicle-a", "vehicle-b", "vehicle-c"] as const;
+export const VERSION = "2.0.0";
+export const PARTICIPANTS = ["carrier-a", "carrier-b", "carrier-c"] as const;
 export type Participant = typeof PARTICIPANTS[number];
 export type TaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type StepKind = "model" | "tool" | "security" | "exchange" | "mpc" | "report" | "analysis";
@@ -47,6 +62,7 @@ export const ModelSettingsSchema = Schema.Struct({
   clearApiKey: Schema.optional(Schema.Boolean),
   deepThinking: Schema.optional(Schema.Boolean),
   thinkingProtocol: Schema.optional(Schema.Literal("auto", "deepseek", "qwen", "openai")),
+  apiFormat: Schema.optional(Schema.Literal("chat-completions", "responses")),
 });
 export type ModelSettingsInput = Schema.Schema.Type<typeof ModelSettingsSchema>;
 export const ClientLogSchema = Schema.Struct({
@@ -74,7 +90,8 @@ export function decode<A, I>(schema: Schema.Schema<A, I>, value: unknown): A {
 export interface Conversation { id: string; title: string; createdAt: number; updatedAt: number }
 export interface ConversationDeletion { conversationId: string; deleted: true; deletedTaskCount: number; taskIds: string[]; alreadyDeleted: boolean }
 export interface Message { id: string; conversationId: string; taskId: string; role: "user" | "assistant"; content: string; createdAt: number }
-export interface Plan { intent: Intent; road: string; windowSeconds: number; participants: readonly Participant[]; statistics?: StatisticsQuery; datasetVersion?: string; requires: ("aggregate" | "analysis" | "verification" | "explanation")[] }
+// Query scope is absent during admission; approved statistics supply the real entrance and time fields.
+export interface Plan { intent: Intent; road?: string; windowSeconds?: number; participants: readonly Participant[]; statistics?: StatisticsQuery; datasetVersion?: string; parkContext?: ParkContext; reservationContext?: ReservationContext; businessContext?: BusinessContext; federationManifest?: FederationManifest; requires: ("aggregate" | "analysis" | "verification" | "explanation")[] }
 export interface ProtocolSection { title: string; data: unknown }
 export interface ProtocolCheck { name: string; status: "passed" | "failed" | "pending"; expected?: string; actual?: string }
 export interface ProtocolDetails { objective: string; operations: string[]; checks?: ProtocolCheck[]; sections?: ProtocolSection[] }
@@ -85,7 +102,7 @@ export interface Step {
   at: number; updatedAt: number; metadata: JsonObject; evidenceIds: number[];
   protocolDetails?: ProtocolDetails; hasPrivateDetails?: boolean; phase?: ConversationPhase;
 }
-export interface Aggregate { road: string; windowSeconds: number; averageSpeed?: number; participantCount: number; protocol: string; query?: StatisticsQuery; datasetVersion?: string; source?: string; groups?: RoadStatistics[] }
+export interface Aggregate { road: string; windowSeconds: number; averageSpeed?: number; participantCount: number; protocol: string; query?: StatisticsQuery; datasetVersion?: string; source?: string; groups?: RoadStatistics[]; parkContext?: ParkContext; reservationContext?: ReservationContext; coordination?: CoordinationResult; businessContext?: BusinessContext; federationManifest?: FederationManifest }
 export interface Analysis { facts: string[]; possibleCauses: string[]; recommendations: string[]; uncertainties: string[]; evidenceIds: number[] }
 export interface Verification { valid: boolean; reason: string; taskId?: string }
 export interface SignedEnvelope { signer: string; payload: JsonObject; signature: string }
@@ -100,9 +117,9 @@ export interface Task {
 export interface TaskSummary extends Omit<Task, "steps" | "report"> { steps?: never; report?: never; stepCount: number; hasReport: boolean }
 export interface PublicEvent { id: number; type: string; taskId: string | null; conversationId: string | null; at: number; payload: JsonObject }
 export interface AuditEvent { id: number; at: number; kind: string; details: JsonObject; claimedIdentity: string | null; verifiedIdentity: string | null; prevHash: string; hash: string }
-export interface PublicNode { id: string; role: string; fingerprint: string; signingPublicKey: string; certificateExpires: string }
-export interface PublicModelSettings { mode: "llm"; provider: string; baseUrl: string; model: string; hasApiKey: boolean; ready: boolean; saved: boolean; deepThinking: boolean; thinkingProtocol: ThinkingProtocol }
-export interface Overview { version: string; mode: string; conversations: Conversation[]; tasks: TaskSummary[]; nodes: PublicNode[]; eventCursor: number; audit: { count: number; lastVerification: Verification & { verifiedAt: number; count: number } | null } }
+export interface PublicNode extends Partial<Omit<IdentityProfile, "role">> { id: string; role: string; fingerprint: string; signingPublicKey: string; certificateExpires: string }
+export interface PublicModelSettings { mode: "llm"; provider: string; baseUrl: string; model: string; hasApiKey: boolean; ready: boolean; saved: boolean; deepThinking: boolean; thinkingProtocol: ThinkingProtocol; apiFormat: ModelApiFormat }
+export interface Overview { version: string; mode: string; park?: ParkSettings; conversations: Conversation[]; tasks: TaskSummary[]; nodes: PublicNode[]; eventCursor: number; audit: { count: number; lastVerification: Verification & { verifiedAt: number; count: number } | null } }
 export const PROVIDERS = [
   { id: "openai", name: "OpenAI", baseUrl: "https://api.openai.com/v1", model: "" },
   { id: "deepseek", name: "DeepSeek", baseUrl: "https://api.deepseek.com", model: "deepseek-chat" },
@@ -113,9 +130,9 @@ export const PROVIDERS = [
 export function planTask(request: string, intent: CreateTask["intent"]): Plan {
   const chosen: Intent = intent && intent !== "auto" ? intent
     : /^(请|请你|帮我|能否|可以|麻烦|再|详细|用通俗语言|\s)*(解释|说明|为什么|什么是|如何理解)/.test(request) ? "explain"
-    : /统计|计算|汇总|平均|均值|车辆数|多少辆|几辆车|样本数|标准差|方差|占比|比例|能耗|耗电|里程|车流量|中位数|分位数|average|statistics/i.test(request) ? "statistics"
+    : /统计|计算|汇总|平均|均值|车辆数|多少辆|几辆车|车次|进园|入园|离园|周转|等待|排队|准点|预约|运力|瓶颈|供需|预计到园|装载|空驶|充电|补能|回程|货量|托盘|未预约需求|运行情况|运营情况|通行情况|业务量|样本数|标准差|方差|占比|比例|能耗|耗电|里程|车流量|中位数|分位数|average|statistics/i.test(request) ? "statistics"
     : /验证.*报告|报告.*验证|验签|verify/i.test(request) ? "verification"
     : /调查|异常|事件|告警|证据|investigat/i.test(request) ? "investigation" : "explain";
-  return { intent: chosen, road: "S101", windowSeconds: 60, participants: PARTICIPANTS,
+  return { intent: chosen, participants: PARTICIPANTS,
     requires: chosen === "statistics" ? ["aggregate", "analysis"] : chosen === "investigation" ? ["analysis"] : chosen === "verification" ? ["verification"] : ["explanation"] };
 }

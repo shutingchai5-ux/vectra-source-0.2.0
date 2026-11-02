@@ -10,5 +10,7 @@ export default defineConfig({
     host: "127.0.0.1", port: Number(process.env.VECTRA_WEB_PORT || 5173), strictPort: true,
     proxy: { "/api": { target: `http://127.0.0.1:${process.env.VECTRA_PORT || 8000}`, changeOrigin: false, timeout: 0, proxyTimeout: 0 } },
   },
-  build: { outDir: "dist", emptyOutDir: true, sourcemap: false, chunkSizeWarningLimit: 600 },
+  build: { outDir: "dist", emptyOutDir: true, sourcemap: false, chunkSizeWarningLimit: 600,
+    rolldownOptions: { output: { codeSplitting: { groups: [{ name: "math-renderer", test: /[\\/]node_modules[\\/]katex[\\/]/ }] } } },
+  },
 });

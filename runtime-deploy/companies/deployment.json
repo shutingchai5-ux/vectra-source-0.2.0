@@ -1,0 +1,1 @@
+{"companies":{"carrier-a":"../carrier-a/deployment.json","carrier-b":"../carrier-b/deployment.json","carrier-c":"../carrier-c/deployment.json"},"dataDir":".","host":"127.0.0.1","logDir":"..\\..\\logs\\companies","parkUrl":"http://127.0.0.1:8000","port":8101,"publicUrl":"http://127.0.0.1:8101","role":"companies"}

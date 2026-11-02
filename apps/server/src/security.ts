@@ -5,9 +5,9 @@ import { join } from "node:path";
 import * as x509 from "@peculiar/x509";
 import canonicalize from "canonicalize";
 import { validateQuery } from "./statistics";
-import { error, PARTICIPANTS, type JsonObject, type PublicNode, type SignedEnvelope } from "@vectra/shared";
+import { error, PARTICIPANTS, REGISTERED_IDENTITIES, identityProfile, type ParkSettings, type JsonObject, type PublicNode, type SignedEnvelope } from "@vectra/shared";
 
-export const IDENTITIES = ["coordinator", "rsu", "report", ...PARTICIPANTS] as const;
+export const IDENTITIES = REGISTERED_IDENTITIES;
 export type Identity = typeof IDENTITIES[number];
 export function canonical(value: unknown): string {
   const inspect = (entry: unknown, depth = 0): void => {
@@ -79,23 +79,78 @@ export class Security {
         atomicWrite(join(folder, "tls.key"), pem("PRIVATE KEY", await crypto.subtle.exportKey("pkcs8", keys.privateKey)));
         atomicWrite(join(folder, "signing.key"), signing.privateKey.export({ format: "pem", type: "pkcs8" }).toString());
         atomicWrite(join(folder, "input.key"), randomBytes(32));
-        nodes[id] = { id, role: id.startsWith("vehicle") ? "vehicle" : id, fingerprint: new X509Certificate(cert.toString("pem")).fingerprint256,
+        nodes[id] = { id, ...identityProfile(id)!, fingerprint: new X509Certificate(cert.toString("pem")).fingerprint256,
           signingPublicKey: signing.publicKey.export({ format: "pem", type: "spki" }).toString(), certificateExpires: dates.notAfter.toISOString() };
       }
       atomicWrite(registryPath, canonical({ caFingerprint: new X509Certificate(ca.toString("pem")).fingerprint256, nodes }));
       atomicWrite(join(root, "storage.key"), randomBytes(32));
     }
     const instance = new Security(root, JSON.parse(readFileSync(registryPath, "utf8")));
+    instance.validate(true);
+    await instance.addAgentIdentities();
     instance.validate(); return instance;
   }
-  validate() {
+  /** Offline provisioning only: rotate enterprise identities before exporting independent deployments. */
+  async reissueParticipants() {
+    const ca=new X509Certificate(this.ca()),alg={name:"ECDSA",namedCurve:"P-256",hash:"SHA-256"};
+    const caKey=await crypto.subtle.importKey("pkcs8",new Uint8Array(createPrivateKey(readFileSync(join(this.root,"ca.key"))).export({format:"der",type:"pkcs8"})),alg,true,["sign"]);
+    const nodes={...this.registry.nodes};
+    for(const id of PARTICIPANTS){
+      const keys=await crypto.subtle.generateKey(alg,true,["sign","verify"]),folder=join(this.root,id);mkdirSync(folder,{recursive:true});
+      const cert=await x509.X509CertificateGenerator.create({subject:"CN="+id,issuer:ca.subject,publicKey:keys.publicKey,signingKey:caKey,signingAlgorithm:alg,
+        notBefore:new Date(Date.now()-60000),notAfter:new Date(Math.min(Date.now()+365*86400000,Date.parse(ca.validTo))),extensions:[
+          new x509.BasicConstraintsExtension(false,undefined,true),new x509.KeyUsagesExtension(x509.KeyUsageFlags.digitalSignature,true),
+          new x509.ExtendedKeyUsageExtension(["1.3.6.1.5.5.7.3.1","1.3.6.1.5.5.7.3.2"]),
+          new x509.SubjectAlternativeNameExtension([{type:"dns",value:id},{type:"url",value:"urn:vectra:"+id}]),
+        ]});
+      const signing=generateKeyPairSync("ed25519");
+      atomicWrite(join(folder,"tls.crt"),cert.toString("pem"));atomicWrite(join(folder,"tls.key"),pem("PRIVATE KEY",await crypto.subtle.exportKey("pkcs8",keys.privateKey)));
+      atomicWrite(join(folder,"signing.key"),signing.privateKey.export({format:"pem",type:"pkcs8"}).toString());atomicWrite(join(folder,"input.key"),randomBytes(32));
+      nodes[id]={...this.registry.nodes[id],fingerprint:new X509Certificate(cert.toString("pem")).fingerprint256,signingPublicKey:signing.publicKey.export({format:"pem",type:"spki"}).toString(),certificateExpires:new Date(cert.notAfter).toISOString()};
+    }
+    atomicWrite(join(this.root,"registry.json"),canonical({...this.registry,nodes}));this.registry.nodes=nodes;this.validate();
+  }
+  private async addAgentIdentities() {
+    const missing = (["planner", "analyst"] as const).filter(id => !this.registry.nodes[id]);
+    if (!missing.length) return;
+    const ca = new X509Certificate(this.ca()), alg = { name: "ECDSA", namedCurve: "P-256", hash: "SHA-256" };
+    const importKey = (file: string) => crypto.subtle.importKey("pkcs8", new Uint8Array(createPrivateKey(readFileSync(file)).export({ format: "der", type: "pkcs8" })), alg, true, ["sign"]);
+    const caKey = await importKey(join(this.root, "ca.key")), nodes = { ...this.registry.nodes };
+    for (const id of missing) {
+      const folder = join(this.root, id); mkdirSync(folder, { recursive: true, mode: 0o700 });
+      const tlsKeyPath = join(folder, "tls.key"), certPath = join(folder, "tls.crt"), signingPath = join(folder, "signing.key"), inputPath = join(folder, "input.key");
+      if (!existsSync(tlsKeyPath)) {
+        const keys = await crypto.subtle.generateKey(alg, true, ["sign", "verify"]);
+        atomicWrite(tlsKeyPath, pem("PRIVATE KEY", await crypto.subtle.exportKey("pkcs8", keys.privateKey)));
+      }
+      const publicDer = createPublicKey(createPrivateKey(readFileSync(tlsKeyPath))).export({ format: "der", type: "spki" });
+      if (!existsSync(certPath)) {
+        const publicKey = await crypto.subtle.importKey("spki", new Uint8Array(publicDer), alg, true, ["verify"]);
+        const cert = await x509.X509CertificateGenerator.create({ subject: `CN=${id}`, issuer: ca.subject, publicKey, signingKey: caKey, signingAlgorithm: alg,
+          notBefore: new Date(Date.now() - 60000), notAfter: new Date(Math.min(Date.now() + 365 * 86400000, Date.parse(ca.validTo))), extensions: [
+            new x509.BasicConstraintsExtension(false, undefined, true), new x509.KeyUsagesExtension(x509.KeyUsageFlags.digitalSignature, true),
+            new x509.ExtendedKeyUsageExtension(["1.3.6.1.5.5.7.3.1", "1.3.6.1.5.5.7.3.2"]),
+            new x509.SubjectAlternativeNameExtension([{ type: "dns", value: id }, { type: "url", value: `urn:vectra:${id}` }]),
+          ] });
+        atomicWrite(certPath, cert.toString("pem"));
+      }
+      const cert = new X509Certificate(readFileSync(certPath));
+      if (!cert.verify(ca.publicKey) || !cert.checkHost(id) || !cert.publicKey.export({ format: "der", type: "spki" }).equals(publicDer) || Date.parse(cert.validTo) <= Date.now()) throw error("identity_invalid", "新增 Agent 的证书或密钥不匹配，已有身份与数据未替换。", 500);
+      if (!existsSync(signingPath)) atomicWrite(signingPath, generateKeyPairSync("ed25519").privateKey.export({ format: "pem", type: "pkcs8" }).toString());
+      if (!existsSync(inputPath)) atomicWrite(inputPath, randomBytes(32));
+      if (readFileSync(inputPath).length !== 32) throw error("key_invalid", "Agent 输入密钥无效。", 500);
+      nodes[id] = { id, ...identityProfile(id)!, fingerprint: cert.fingerprint256, signingPublicKey: createPublicKey(createPrivateKey(readFileSync(signingPath))).export({ format: "pem", type: "spki" }).toString(), certificateExpires: new Date(cert.validTo).toISOString() };
+    }
+    atomicWrite(join(this.root, "registry.json"), canonical({ ...this.registry, nodes })); this.registry.nodes = nodes;
+  }
+  validate(allowAgentUpgrade = false) {
     const ca = new X509Certificate(this.ca());
     if (!ca.ca || !ca.verify(ca.publicKey) || ca.fingerprint256 !== this.registry.caFingerprint || Date.parse(ca.validTo) <= Date.now()) throw error("ca_invalid", "本地 CA 验证失败。", 500);
-    for (const id of IDENTITIES) this.validateNode(id);
+    for (const id of IDENTITIES) { if (allowAgentUpgrade && (id === "planner" || id === "analyst") && !this.registry.nodes[id]) continue; this.validateNode(id); }
   }
   validateNode(id: string) {
     const node = this.registry.nodes[id];
-    if (!node) throw error("identity_unknown", "身份不在登记列表。", 403);
+    if (!IDENTITIES.includes(id as Identity) || !node || node.id !== id) throw error("identity_unknown", "身份不在登记列表。", 403);
     const cert = new X509Certificate(readFileSync(join(this.root, id, "tls.crt")));
     const ca = new X509Certificate(this.ca());
     if (!cert.verify(ca.publicKey) || cert.fingerprint256 !== node.fingerprint || !cert.checkHost(id) || Date.parse(cert.validFrom) > Date.now() || Date.parse(cert.validTo) <= Date.now()) throw error("identity_invalid", "证书、登记指纹或有效期校验失败。", 403);
@@ -104,6 +159,16 @@ export class Security {
   ca() { return readFileSync(join(this.root, "ca.crt"), "utf8"); }
   tls(id: Identity) { this.validateNode(id); return { ca: this.ca(), cert: readFileSync(join(this.root, id, "tls.crt")), key: readFileSync(join(this.root, id, "tls.key")) }; }
   nodes() { return IDENTITIES.map(id => this.validateNode(id)); }
+  configureIdentities(settings: ParkSettings) {
+    // Update business metadata only. Existing keys, fingerprints and signed records stay intact.
+    const nodes = { ...this.registry.nodes };
+    for (const id of IDENTITIES) nodes[id] = { ...this.validateNode(id), ...identityProfile(id, settings)! };
+    if (canonical(nodes) !== canonical(this.registry.nodes)) {
+      atomicWrite(join(this.root, "registry.json"), canonical({ ...this.registry, nodes }));
+      this.registry.nodes = nodes;
+    }
+    return this.nodes();
+  }
   storageKey() { const key = readFileSync(join(this.root, "storage.key")); if (key.length !== 32) throw error("key_invalid", "存储密钥无效。", 500); return key; }
   sign(id: Identity, payload: JsonObject): SignedEnvelope {
     const node = this.validateNode(id), key = createPrivateKey(readFileSync(join(this.root, id, "signing.key")));

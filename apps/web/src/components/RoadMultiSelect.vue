@@ -1,0 +1,13 @@
+<script setup lang="ts">
+import { computed } from "vue";
+const props = withDefaults(defineProps<{ modelValue: string[]; options: string[]; label?: string; disabled?: boolean; hint?: string }>(), { label: "入口", hint: "可同时勾选多条道路" });
+const emit = defineEmits<{ "update:modelValue": [value: string[]] }>();
+const unknown = computed(() => props.modelValue.filter(road => !props.options.includes(road)));
+function toggle(road: string, checked: boolean) { emit("update:modelValue", checked ? [...new Set([...props.modelValue, road])] : props.modelValue.filter(value => value !== road)); }
+</script>
+<template>
+  <UiFieldset class="road-picker" :disabled="disabled"><legend>{{ label }}<small>已选 {{ modelValue.length }} 条</small></legend><div class="road-picker-options"><label v-for="road in options" :key="road" :class="{ checked: modelValue.includes(road) }"><input type="checkbox" :checked="modelValue.includes(road)" @change="toggle(road, ($event.target as HTMLInputElement).checked)" /><span>{{ road }}</span></label><span v-if="!options.length" class="road-picker-empty">园区固定四个入口，请刷新页面后重新选择。</span></div><div class="road-picker-footer"><span>{{ hint }}</span><div><UiButton type="button" :disabled="disabled || !options.length" @click="emit('update:modelValue', [...options])">全选</UiButton><UiButton type="button" :disabled="disabled || !modelValue.length" @click="emit('update:modelValue', [])">清空</UiButton></div></div><p v-if="unknown.length" class="road-picker-unknown">{{ unknown.join('、') }} 不属于四个固定入口，请重新选择。</p></UiFieldset>
+</template>
+<style scoped>
+.road-picker{min-width:0;margin:0;padding:0;border:0}.road-picker legend{display:flex;align-items:center;gap:10px;padding:0;margin-bottom:10px;font-size:12px;font-weight:600;color:#4d6558}.road-picker legend small{font-size:10px;font-weight:400;color:#8b9b91}.road-picker-options{display:flex;flex-wrap:wrap;gap:8px}.road-picker-options>label{display:flex;align-items:center;gap:8px;padding:8px 12px;background:#f8faf9;border:1px solid #dfe7e1;border-radius:9px;cursor:pointer;font-size:12px;color:#5c7264}.road-picker-options>label.checked{color:#22755a;background:#eaf6ef;border-color:#9dcdb5}.road-picker-options input{width:14px;height:14px;margin:0;padding:0;accent-color:#238265}.road-picker-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:9px;font-size:10px;color:#8b9b91}.road-picker-footer button{background:none;color:#5b876f;font-size:10px;padding:2px 6px}.road-picker-empty,.road-picker-unknown{font-size:11px;color:#9b8057}.road-picker-unknown{margin-bottom:0}.road-picker:disabled{opacity:.7}
+</style>

@@ -12,7 +12,7 @@ import { ModelSettings } from "../src/model";
 import { Collaboration } from "../src/service";
 import { startServer } from "../src/index";
 import { config } from "../src/config";
-import { configureFixture, fixtureRecords, fixtureProviderReply } from "./fixtures";
+import { configureFixture, configureFixtureModels, fixtureRecords, fixtureVisits, fixtureProviderReply } from "./fixtures";
 
 const queryAt = (now: number): StatisticsQuery => ({ roads: ["R202", "S102"], start: now - 600000, end: now, timeZone: "Asia/Shanghai", metrics: [
   { label: "均速", operation: "mean", field: "speed" }, { label: "车辆数", operation: "vehicle_count" }, { label: "样本数", operation: "count" },
@@ -69,22 +69,22 @@ test("today statistics complete real MPC and report delivery despite a model pro
   try {
     configureFixture(app);
     const submittedAt = Date.now(), midnight = Date.parse(`${shanghaiDay(submittedAt)}T00:00:00+08:00`);
-    app.telemetry.import(fixtureRecords().map(row => ({ ...row, recordedAt: midnight + Math.floor((submittedAt - midnight) / 2) })));
+    app.park.import(fixtureVisits().map(row => ({ ...row, arrivedAt: midnight, gateStartedAt: midnight, departedAt: midnight })), app.park.catalog().version);
     globalThis.fetch = Object.assign(async (_url: unknown, options?: RequestInit) => {
       const payload = JSON.parse(String(options?.body));
       if (payload.tools.some((tool: any) => tool.function.name === "submit_statistics_plan")) {
-        return Response.json({ choices: [{ message: { role: "assistant", content: null, tool_calls: [{ id: randomUUID(), type: "function", function: { name: "submit_statistics_plan", arguments: JSON.stringify({ roads: ["S101"], start: midnight, end: midnight + 86400000, timeZone: "Asia/Shanghai", metrics: [{ label: "平均速度", operation: "mean", field: "speed" }, { label: "总里程", operation: "sum", field: "distanceKm" }, { label: "总能耗", operation: "sum", field: "energyKwh" }] }) } }] } }] });
+        return Response.json({ choices: [{ message: { role: "assistant", content: null, tool_calls: [{ id: randomUUID(), type: "function", function: { name: "submit_statistics_plan", arguments: JSON.stringify({ dataset: "park_visits", cohort: "arrivals", roads: ["东入口"], start: midnight, end: midnight + 86400000, timeZone: "Asia/Shanghai", metrics: [{ label: "平均排队时长", operation: "mean", field: "queueMinutes" }, { label: "总里程", operation: "sum", field: "distanceKm" }, { label: "总能耗", operation: "sum", field: "energyKwh" }] }) } }] } }] });
       }
       return fixtureProviderReply(payload);
     }, { preconnect: originalFetch.preconnect }) as typeof fetch;
-    const task = app.submit({ request: "统计 S101道路 今天的平均速度、总里程和总能耗。", requestId: randomUUID(), intent: "statistics" });
+    const task = app.submit({ request: "统计 S101道路 今天的平均排队时长、总里程和总能耗。", requestId: randomUUID(), intent: "statistics" });
     const deadline = Date.now() + 30000;
     while (["queued", "running"].includes(app.store.task(task.id)!.status) && Date.now() < deadline) await Bun.sleep(30);
     const completed = app.store.task(task.id)!;
     expect(completed.error, JSON.stringify(completed.error)).toBeUndefined(); expect(completed.status).toBe("completed");
     expect(completed.plan.statistics!.start).toBe(midnight); expect(completed.plan.statistics!.end).toBeGreaterThanOrEqual(submittedAt);
     expect(completed.plan.statistics!.end).toBeLessThanOrEqual(Date.now());
-    expect(completed.result?.groups?.[0].metrics.map(metric => metric.value)).toEqual([40, 3, 0.45]);
+    expect(completed.result?.groups?.[0].metrics.map(metric => metric.value)).toEqual([0, 3, 0.45]);
     expect(completed.analysis).toBeDefined();
     const report = app.report(task.id); expect(app.verifyReport(report).valid).toBeTrue(); expect((report.payload.plan as any).statistics).toEqual(completed.plan.statistics);
   } finally {
@@ -118,7 +118,7 @@ test("telemetry validates ownership and publishes immutable encrypted versions",
     expect(telemetry.catalog().roads).toEqual([]);
     const catalog = telemetry.import(recordsAt(now));
     expect(catalog.roads[0].id).toBe("R202");
-    expect(() => telemetry.import([...recordsAt(now), { ...recordsAt(now)[0], participant: "vehicle-b", recordedAt: now - 1000 }])).toThrow();
+    expect(() => telemetry.import([...recordsAt(now), { ...recordsAt(now)[0], participant: "carrier-b", recordedAt: now - 1000 }])).toThrow();
     expect(() => telemetry.import([...recordsAt(now), recordsAt(now)[0]])).toThrow();
     expect(() => validateQuery({ ...queryAt(now), roads: ["S999"] }, catalog)).toThrow();
     expect(() => validateQuery({ ...queryAt(now), metrics: [{ label: "中位数", operation: "median", field: "speed" }] })).toThrow();
@@ -144,9 +144,9 @@ test("variable fleets auto-assign stable owners, count distinct cars and prevent
       expect(telemetry.snapshot().records.map(row => [row.vehicleId, row.participant]).sort()).toEqual(snapshot.records.map(row => [row.vehicleId, row.participant]).sort());
       expect(() => telemetry.import(rows, catalog.version)).toThrow("车辆数据已由其他操作更新"); expect(telemetry.catalog().version).toBe(reversed.version);
     }
-    const rows = [0, 1].map(i => ({ vehicleId: "mixed-owner", road: "R202", recordedAt: now - 1000 - i, speed: 30, ...(i ? { participant: "vehicle-c" } : {}) }));
+    const rows = [0, 1].map(i => ({ vehicleId: "mixed-owner", road: "R202", recordedAt: now - 1000 - i, speed: 30, ...(i ? { participant: "carrier-c" } : {}) }));
     telemetry.import(rows);
-    expect(telemetry.snapshot().records.every(row => row.participant === "vehicle-c")).toBeTrue();
+    expect(telemetry.snapshot().records.every(row => row.participant === "carrier-c")).toBeTrue();
   } finally { if (resolve(root).startsWith(resolve(tmpdir(), "vectra-fleet-test-"))) rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -155,13 +155,13 @@ test("model-only setup migrates legacy settings, rejects unconfigured tasks and 
   try {
     app.settings.save({ provider: "custom", baseUrl: "https://example.invalid/v1", model: "", clearApiKey: true });
     expect(app.settings.public().ready).toBeFalse();
-    expect(() => app.submit({ request: "介绍系统", requestId: randomUUID(), intent: "explain" })).toThrow("请先在模型设置");
+    expect(() => app.submit({ request: "介绍系统", requestId: randomUUID(), intent: "explain" })).toThrow("请先在主智能体详情");
     expect(app.store.tasks()).toHaveLength(0);
     expect(() => app.settings.save({ mode: "demo", provider: "custom", baseUrl: "https://example.invalid/v1", model: "test" })).toThrow();
     atomicWrite(join(root, "model-settings.enc.json"), canonical(seal({ mode: "demo", provider: "custom", baseUrl: "https://example.invalid/v1", model: "test", apiKey: "migration-key" }, app.security.storageKey(), "model-settings")));
     const migrated = new ModelSettings(root, app.security);
     expect(migrated.public().mode).toBe("llm"); expect(migrated.public().ready).toBeTrue(); expect(migrated.snapshot().apiKey).toBe("migration-key");
-    app.settings.save({ provider: "custom", baseUrl: "https://example.invalid/v1", model: "test", apiKey: "migration-key" });
+    configureFixtureModels(app, "migration-key");
     const task = app.submit({ request: "统计 S101 平均速度", requestId: randomUUID(), intent: "statistics" });
     const deadline = Date.now() + 2000;
     while (["queued", "running"].includes(app.store.task(task.id)!.status) && Date.now() < deadline) await Bun.sleep(10);
@@ -174,22 +174,27 @@ test("LLM plans a custom metric DSL then real three-party API computation signs 
   const live = await startServer({ ...config(), dataDir: root, logDir: join(root, "logs"), port: 0, cooldown: 0, mpcTimeout: 25000 });
   const base = `http://127.0.0.1:${live.server.port}`;
   const session = await originalFetch(`${base}/api/session`), cookie = session.headers.get("set-cookie")!.split(";")[0];
-  const request = async (path: string, method = "GET", value?: unknown) => originalFetch(base + path, { method, headers: { Cookie: cookie, "Content-Type": "application/json" }, ...(value === undefined ? {} : { body: JSON.stringify(value) }) });
-  const now = Date.now(), query = queryAt(now);
+  let carrierToken = "";
+  const request = async (path: string, method = "GET", value?: unknown) => originalFetch(base + path, { method, headers: { Cookie: cookie, "Content-Type": "application/json", "X-Carrier-Role": carrierToken }, ...(value === undefined ? {} : { body: JSON.stringify(value) }) });
+  const now = Date.now() - 4 * 3600000, query: StatisticsQuery = { ...queryAt(now), dataset: "park_visits", cohort: "arrivals", roads: ["东入口", "西入口"], metrics: queryAt(now).metrics.map(m => ({ ...m, ...(m.field === "speed" ? { field: "queueMinutes" as const } : {}), ...(m.filter ? { filter: { ...m.filter, field: "queueMinutes" as const } } : {}) })) };
   let rejectAnalysis = false;
   try {
-    expect((await request("/api/telemetry", "POST", recordsAt(now))).status).toBe(201);
+    for (const participant of PARTICIPANTS) {
+      carrierToken = (await (await request("/api/carrier-role", "POST", { carrierId: participant })).json()).token;
+      expect((await request("/api/telemetry", "POST", recordsAt(now).filter(row => row.participant === participant))).status).toBe(201);
+    }
     const catalog = await (await request("/api/telemetry")).json();
     // The second road is present in the catalog but has no records in the selected interval.
     const fleet = Array.from({ length: 12 }, (_, i) => { const { participant, ...record } = recordsAt(now)[i % 3]; return { ...record, vehicleId: `fleet-${i}` }; });
     const imported = live.app.telemetry.import([...fleet, { ...fleet[0], road: "S102", recordedAt: now - 700000 }]);
+    const parkImported = live.app.park.import([...fleet, { ...fleet[0], road: "S102", recordedAt: now - 700000 }].map((row, i) => ({ visitId: `park-legacy-check-${i}`, carrierId: ["carrier-a", "carrier-b", "carrier-c"][i % 3], vehicleId: "沪A" + row.vehicleId.slice(6).padStart(5, "0"), road: row.road === "S102" ? "西入口" : "东入口", arrivedAt: row.recordedAt, gateStartedAt: row.recordedAt + row.speed * 60000, departedAt: row.recordedAt + 90 * 60000, distanceKm: row.distanceKm, energyKwh: row.energyKwh })), live.app.park.catalog().version);
     const privatePath = "/api/telemetry/records";
     expect((await originalFetch(base + privatePath)).status).toBe(401);
     expect((await originalFetch(base + privatePath, { headers: { Cookie: cookie, Origin: "https://attacker.invalid" } })).status).toBe(403);
     const snapshotResponse = await request(privatePath), snapshot = await snapshotResponse.json();
     expect(snapshotResponse.headers.get("cache-control")).toBe("no-store"); expect(snapshot.records).toHaveLength(13); expect(snapshot.version).toBe(imported.version);
     expect((await request("/api/telemetry", "POST", { records: fleet, baseVersion: catalog.version })).status).toBe(409);
-    live.app.settings.save({ mode: "llm", provider: "custom", baseUrl: "https://example.invalid/v1", model: "test", apiKey: "statistics-test-key" });
+    configureFixtureModels(live.app, "statistics-test-key");
     globalThis.fetch = Object.assign(async (_url: unknown, options?: RequestInit) => {
       const payload = JSON.parse(String(options?.body)), names = payload.tools.map((t: any) => t.function.name), last = payload.messages.at(-1);
       const call = (name: string, args: unknown = {}) => Response.json({ choices: [{ message: { role: "assistant", content: null, tool_calls: [{ id: randomUUID(), type: "function", function: { name, arguments: JSON.stringify(args) } }] } }] });
@@ -204,12 +209,12 @@ test("LLM plans a custom metric DSL then real three-party API computation signs 
       expect(JSON.parse(last.content).analysis.evidenceIds.length).toBeGreaterThan(0);
       return Response.json({ choices: [{ message: { role: "assistant", content: "已完成批准方案；R202均速30、低速比例33.333333%。" } }] });
     }, { preconnect: originalFetch.preconnect }) as typeof fetch;
-    const created = live.app.submit({ request: "统计 R202、S102 最近10分钟均速、车辆数、样本数、速度低于20的占比、波动、总里程与每百公里能耗", requestId: randomUUID(), intent: "statistics" });
+    const created = live.app.submit({ request: `统计 ${shanghaiDay(now)} 东入口、西入口 指定10分钟到达车次的排队均值、车辆数、车次数、排队低于20分钟的比例、波动、总里程与每百公里电耗`, requestId: randomUUID(), intent: "statistics" });
     const end = Date.now() + 30000; let task: Task;
     do { await Bun.sleep(30); task = live.app.store.task(created.id)!; } while (["queued", "running"].includes(task.status) && Date.now() < end);
     expect(task.error, JSON.stringify(task.error)).toBeUndefined(); expect(task.status).toBe("completed");
     expect(task.result?.groups?.[0].metrics.map(m => m.value)).toEqual([30, 12, 12, 33.333333, 21.602469, 12, 15]);
-    expect(task.plan.datasetVersion).toBe(imported.version);
+    expect(task.plan.datasetVersion).toBe(parkImported.version);
     expect(task.plan.statistics!.end - task.plan.statistics!.start).toBe(600000); expect(task.plan.statistics!.end).toBeGreaterThanOrEqual(now);
     expect(task.plan.statistics!.roads).toEqual(query.roads); expect(task.plan.statistics!.metrics).toEqual(query.metrics);
     expect(task.result?.groups?.[1].metrics[0].value).toBeNull();
@@ -223,7 +228,7 @@ test("LLM plans a custom metric DSL then real three-party API computation signs 
     expect(catalog.version).not.toBe(imported.version);
 
     rejectAnalysis = true;
-    const refused = live.app.submit({ request: "统计 R202 最近10分钟的指标", requestId: randomUUID(), intent: "statistics" });
+    const refused = live.app.submit({ request: `统计 ${shanghaiDay(now)} R202 指定10分钟到达车次指标`, requestId: randomUUID(), intent: "statistics" });
     const failedBy = Date.now() + 30000;
     while (["queued", "running"].includes(live.app.store.task(refused.id)!.status) && Date.now() < failedBy) await Bun.sleep(30);
     const failed = live.app.store.task(refused.id)!;

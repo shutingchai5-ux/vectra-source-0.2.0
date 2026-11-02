@@ -1,9 +1,10 @@
 import { defineStore } from "pinia";
 import { computed, ref, reactive, watch } from "vue";
 import { Schema } from "effect";
-import { error, type Analysis, type AuditEvent, type Conversation, type ConversationDeletion, type CreateTask, type Message, type Overview, type PublicEvent, type PublicModelSettings, type Step, type Task, type TaskSummary } from "@vectra/shared";
+import { error, type Analysis, type AuditEvent, type Conversation, type ConversationDeletion, type CreateTask, type Message, type Overview, type PublicEvent, type PublicModelSettings, type PublicNode, type Step, type Task, type TaskSummary } from "@vectra/shared";
 import { api } from "../api";
 import { recordClient } from "../diagnostics";
+import { setParkSettings, setRegisteredIdentities } from "../park-state";
 
 const EventSchema = Schema.Struct({ id: Schema.Number, type: Schema.String, taskId: Schema.NullOr(Schema.String), conversationId: Schema.NullOr(Schema.String), at: Schema.Number, payload: Schema.Record({ key: Schema.String, value: Schema.Unknown }) });
 export const useWorkspace = defineStore("workspace", () => {
@@ -58,6 +59,8 @@ export const useWorkspace = defineStore("workspace", () => {
       try {
         await api("/api/session");
         if (!overview.value) { await init(); return; }
+        const nodes = await api<PublicNode[]>("/api/identities"); overview.value.nodes = nodes; setRegisteredIdentities(nodes);
+        modelSettings.value = await api<PublicModelSettings>("/api/model-settings");
         if (!replaying) {
           replaying = true;
           let events: PublicEvent[];
@@ -99,6 +102,8 @@ export const useWorkspace = defineStore("workspace", () => {
     try {
       await api("/api/session");
       const state = await api<Overview>("/api/overview"); overview.value = state; conversations.value = state.conversations; cursor.value = state.eventCursor;
+      if (state.park) setParkSettings(state.park);
+      setRegisteredIdentities(state.nodes);
       for (const task of state.tasks) summary(task);
       modelSettings.value = await api<PublicModelSettings>("/api/model-settings");
       feed();

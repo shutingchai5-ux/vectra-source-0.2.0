@@ -18,7 +18,7 @@ async function copy() {
 </script>
 <template>
   <section class="protocol-section">
-    <div class="protocol-section-heading"><h4>{{ presentation.title }}</h4><div class="protocol-section-actions"><button v-if="typeof section.data === 'object' && section.data !== null" @click="raw = !raw" :aria-pressed="raw">{{ raw ? '返回易读说明' : '查看原始 JSON' }}</button><button @click="copy">{{ copied ? '已复制原文' : '复制原文' }}</button></div></div>
+    <div class="protocol-section-heading"><h4>{{ presentation.title }}</h4><div class="protocol-section-actions"><UiButton v-if="typeof section.data === 'object' && section.data !== null" @click="raw = !raw" :aria-pressed="raw">{{ raw ? '返回易读说明' : '查看原始 JSON' }}</UiButton><UiButton @click="copy">{{ copied ? '已复制原文' : '复制原文' }}</UiButton></div></div>
     <MarkdownContent class="protocol-section-description" :content="presentation.description" explain-protocols />
     <pre v-if="raw">{{ text() }}</pre>
     <ReadableData v-else :value="section.data" />

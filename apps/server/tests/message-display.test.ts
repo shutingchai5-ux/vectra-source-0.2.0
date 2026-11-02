@@ -1,12 +1,40 @@
-import { test, expect } from "bun:test";
+import { test, expect, beforeEach } from "bun:test";
+import { defaultParkSettings, planTask, PARK_ENTRANCES } from "@vectra/shared";
 import { CONVERSATION_PHASES, resolveStepPhase, type Step, type StatisticsQuery } from "@vectra/shared";
 import { renderMarkdown } from "../../web/src/markdown";
 import { mathematicsForStep, securityProtocolsForStep, formatProtocolMathematics } from "../../web/src/message-details";
-import { actionLabel, presentStep, sectionPresentation, userFacingError } from "../../web/src/conversation";
+import { actionLabel, actorFor, participantGroups, presentStep, sectionPresentation, stepActor, userFacingError } from "../../web/src/conversation";
+import { registeredIdentities, setRegisteredIdentities } from "../../web/src/park-state";
+import { fixtureIdentities } from "./fixtures";
 import { expandSecurityNames, securityNames } from "../../web/src/security-language";
 import { explainStep, stepGuides, taskRecovery } from "../../web/src/step-explanations";
 
 const step = (action: string, extra: Partial<Step> = {}): Step => ({ id: action, taskId: "task", action, agent: "任务协调器", kind: "security", status: "completed", detail: "", at: 0, updatedAt: 0, metadata: {}, evidenceIds: [], ...extra });
+beforeEach(() => setRegisteredIdentities(fixtureIdentities()));
+
+test("carrier speakers use authoritative registered names without rewriting historical payloads", () => {
+  const frozen = defaultParkSettings(); frozen.carriers[0].name = "甲方运输";
+  const later = structuredClone(frozen); later.carriers[0].name = "新名称";
+  setRegisteredIdentities(fixtureIdentities(frozen));
+  expect(actorFor("carrier-a", frozen)).toMatchObject({ name: "甲方运输协作节点", icon: "compute", badge: "A", code: "carrier-a", usesLlm: false });
+  expect(actorFor("carrier-a", later).name).toBe("甲方运输协作节点");
+  expect(new Set(frozen.carriers.map(c => actorFor(c.participant, frozen).tone)).size).toBe(3);
+  const source = step("生成秘密分享多项式", { agent: "carrier-a" }), original = JSON.stringify(source);
+  const presentation = presentStep(source, { sections: [{ title: "实际多项式与全部份额", data: { components: [], shares: [{ recipient: "carrier-a", x: 1, value: "123" }] } }] }, frozen);
+  expect(presentation.rows[0].label).toContain("甲方运输"); expect(presentation.rows[0].value).toBe("123"); expect(JSON.stringify(source)).toBe(original);
+  setRegisteredIdentities(fixtureIdentities(later)); expect(actorFor("carrier-a", frozen).name).toBe("新名称协作节点");
+});
+
+test("conversation roles are registered principals, grouped by level, and only the model caller is an Agent", () => {
+  const steps = ["coordinator", "统计规划 Agent", "信息安全分析 Agent", "安全执行层", "隐私计算执行器", "RSU 安全网关", "报告服务", "carrier-a", "carrier-b", "carrier-c", "unknown-person"].map(agent => step("处理记录", { agent }));
+  const groups = participantGroups(steps), ids = groups.flatMap(group => group.actors.map(actor => actor.id));
+  expect(groups.map(group => group.level)).toEqual([1, 2, 3]); expect(ids).toHaveLength(8); expect(new Set(ids).size).toBe(8);
+  expect(ids.every(id => registeredIdentities.value.some(node => node.id === id))).toBeTrue();
+  for (const group of groups) for (const actor of group.actors) expect(actor.name.endsWith("Agent")).toBe(actor.usesLlm);
+  expect(actorFor("unknown-person").registered).toBeFalse();
+  expect(stepActor(step("模型响应", { kind: "model", agent: "信息安全分析 Agent", sender: "模型服务" })).id).toBe("analyst");
+  setRegisteredIdentities([]); expect(participantGroups(steps)).toEqual([]); expect(actorFor("coordinator").registered).toBeFalse();
+});
 
 test("messages preserve explicit phases and classify historical model, tool and worker steps", () => {
   expect(CONVERSATION_PHASES.map(phase => phase.id)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
@@ -20,6 +48,32 @@ test("messages preserve explicit phases and classify historical model, tool and 
   expect(resolveStepPhase(step("三方秘密分享计算", { phase: 4 }))).toBe(4);
   expect(resolveStepPhase(step("模型请求", { kind: "model", agent: "统计规划 Agent" }))).toBe(2);
   expect(resolveStepPhase(step("模型请求", { kind: "model", agent: "信息安全分析 Agent" }))).toBe(7);
+});
+
+test("admission cards preserve the requested entrance without displaying legacy scope placeholders as an approved query", () => {
+  const request = "统计 东入口 今天到达的车次数、车辆数和未离园车次数。";
+  const initial = planTask(request, "statistics");
+  const recorded = step("锁定任务计划", { phase: 2, protocolDetails: { objective: "确认交付要求", operations: [], sections: [{ title: "请求与执行契约", data: { request, plan: initial } }] } });
+  const legacy = structuredClone(recorded);
+  const contract = legacy.protocolDetails!.sections![0].data as { request: string; plan: typeof initial };
+  contract.plan.road = PARK_ENTRANCES.join("、"); contract.plan.windowSeconds = 60;
+  const before = JSON.stringify(legacy);
+  for (const source of [recorded, legacy]) {
+    const view = presentStep(source);
+    expect(view.facts).toContainEqual({ label: "提问中的入口", value: "东入口" });
+    expect(view.facts).toContainEqual({ label: "执行入口", value: "待统计规划 Agent 确认" });
+    expect(view.facts).toContainEqual({ label: "统计时间", value: "待统计规划 Agent 确认" });
+    expect(view.facts.some(fact => fact.value === PARK_ENTRANCES.join("、") || fact.label === "任务窗口")).toBeFalse();
+    expect(view.body).toContain("批准统计方案");
+  }
+  expect(initial).not.toHaveProperty("road"); expect(initial).not.toHaveProperty("windowSeconds");
+  expect(JSON.stringify(legacy)).toBe(before);
+  contract.request = "统计东入口和北入口今天的到达车次数";
+  expect(presentStep(legacy).facts).toContainEqual({ label: "提问中的入口", value: "东入口、北入口" });
+  contract.request = "统计今天到达的车次数";
+  expect(presentStep(legacy).facts.some(fact => fact.label === "提问中的入口" || fact.value === PARK_ENTRANCES.join("、"))).toBeFalse();
+  const approved = step("批准统计方案", { phase: 2, protocolDetails: { objective: "固定统计范围", operations: [], sections: [{ title: "统计方案", data: { dataset: "park_visits", roads: ["东入口"], start: 0, end: 60000, metrics: [{ label: "到达车次数" }] } }] } });
+  expect(presentStep(approved).facts).toContainEqual({ label: "查询入口", value: "东入口" });
 });
 
 test("protocol labels follow execution evidence rather than model prose or blanket worker metadata", () => {
@@ -112,11 +166,13 @@ test("structured model replies and dynamic query facts remain visible without ch
   expect(presented.nextActions).toEqual(["查询真实审计证据"]);
   expect(JSON.stringify(reply)).toBe(original);
   const query = presentStep(step("批准统计方案", { protocolDetails: { objective: "原说明", operations: [], sections: [{ title: "统计方案", data: { roads: ["S101", "S102"], start: 0, end: 60000, metrics: [{ label: "平均速度" }] } }] } }));
-  expect(query.facts).toContainEqual({ label: "查询路段", value: "S101、S102" });
+  expect(query.facts).toContainEqual({ label: "采样路段", value: "S101、S102" });
+  const parkQuery = presentStep(step("批准统计方案", { protocolDetails: { objective: "园区查询", operations: [], sections: [{ title: "统计方案", data: { dataset: "park_visits", roads: ["东入口", "南入口"], start: 0, end: 60000, metrics: [{ label: "车次数" }] } }] } }));
+  expect(parkQuery.facts).toContainEqual({ label: "查询入口", value: "东入口、南入口" });
   expect(query.facts).toContainEqual({ label: "统计指标", value: "平均速度" });
   expect(sectionPresentation("RFC 8785 / JCS 规范化待签名字节（UTF-8）").description).toContain("实际参与签名的原文");
   expect(userFacingError("任务缺少计划要求的产物：analysis。")).toContain("证据分析");
-  expect(taskRecovery("model_unavailable")).toContain("模型设置");
+  expect(taskRecovery("model_unavailable")).toContain("Agent 详情");
   const arrayReply = step("模型响应", { kind: "model", protocolDetails: { objective: "", operations: [], sections: [{ title: "公开响应字段", data: { content: '[{"facts":["事实"]}]' } }] } });
   expect(presentStep(arrayReply).structuredAnswer).toEqual([{ facts: ["事实"] }]);
   const historical = step("unknown_internal_handler", { detail: "raw developer wording" });
@@ -125,6 +181,6 @@ test("structured model replies and dynamic query facts remain visible without ch
   expect(historical.detail).toBe("raw developer wording");
   const legacy = renderMarkdown("按执行契约调用 compute_statistics。原文：`compute_statistics`。", true);
   expect(legacy).toContain("本轮交付要求");
-  expect(legacy).toContain("执行批准的车辆统计");
+  expect(legacy).toContain("执行承运商联合统计");
   expect(legacy).toContain("<code>compute_statistics</code>");
 });

@@ -88,26 +88,26 @@ onUnmounted(() => { analysisRequest++; requests.abort(); });
   <div class="evidence-page">
     <div class="page-heading">
       <div><div class="eyebrow">EVIDENCE & AUDIT</div><h1>证据与审计</h1><p>按用途查找事件，沿任务追踪过程，并独立核对审计完整性。</p></div>
-      <div class="button-row"><button class="secondary" :disabled="loading" @click="load">{{ loading ? '刷新中…' : '刷新记录' }}</button><button class="primary" :disabled="verifying" @click="verify">{{ verifying ? '校验中…' : '完整校验审计链' }}</button></div>
+      <div class="button-row"><UiButton class="secondary" :disabled="loading" @click="load">{{ loading ? '刷新中…' : '刷新记录' }}</UiButton><UiButton class="primary" :disabled="verifying" @click="verify">{{ verifying ? '校验中…' : '完整校验审计链' }}</UiButton></div>
     </div>
     <div class="evidence-tabs" role="group" aria-label="证据与审计内容分组">
-      <button v-for="item in panes" :key="item.id" :class="{ active: pane === item.id }" :aria-current="pane === item.id ? 'page' : undefined" @click="pane = item.id"><strong>{{ item.label }}</strong><span>{{ item.description }}</span></button>
+      <UiButton v-for="item in panes" :key="item.id" :class="{ active: pane === item.id }" :aria-current="pane === item.id ? 'page' : undefined" @click="pane = item.id"><strong>{{ item.label }}</strong><span>{{ item.description }}</span></UiButton>
     </div>
 
     <div v-if="pane === 'events'">
       <section class="panel">
-        <div class="panel-heading"><div><h2>按事件用途浏览</h2><p class="muted scope-note">分类和筛选覆盖最近 {{ events.length }} 条已加载事件（最多 100 条），时间均为上海时区。</p></div><button class="text-button" :aria-pressed="category === 'all'" @click="category = 'all'">全部类别 · {{ events.length }}</button></div>
+        <div class="panel-heading"><div><h2>按事件用途浏览</h2><p class="muted scope-note">分类和筛选覆盖最近 {{ events.length }} 条已加载事件（最多 100 条），时间均为上海时区。</p></div><UiButton class="text-button" :aria-pressed="category === 'all'" @click="category = 'all'">全部类别 · {{ events.length }}</UiButton></div>
         <div class="category-grid">
-          <button v-for="item in categories.filter(item => item.id !== 'other' || item.count > 0)" :key="item.id" class="category-card" :class="{ active: category === item.id }" :aria-pressed="category === item.id" @click="category = category === item.id ? 'all' : item.id">
+          <UiButton v-for="item in categories.filter(item => item.id !== 'other' || item.count > 0)" :key="item.id" class="category-card" :class="{ active: category === item.id }" :aria-pressed="category === item.id" @click="category = category === item.id ? 'all' : item.id">
             <span class="category-marker">{{ item.marker }}</span><span class="category-copy"><strong>{{ item.label }}</strong><small>{{ item.description }}</small></span><b>{{ item.count }}</b>
-          </button>
+          </UiButton>
         </div>
         <div class="evidence-filters">
-          <label><span>关键词</span><input v-model="keyword" type="search" placeholder="搜索事件、路段、身份、编号或错误代码"></label>
-          <label><span>关联任务</span><select v-model="taskId"><option value="">全部任务（含无关联任务的记录）</option><option v-for="id in tasks" :key="id" :value="id">{{ id }}</option></select></label>
+          <label><span>关键词</span><UiInput v-model="keyword" type="search" placeholder="搜索事件、路段、身份、编号或错误代码" /></label>
+          <label><span>关联任务</span><UiSelect v-model="taskId"><option value="">全部任务（含无关联任务的记录）</option><option v-for="id in tasks" :key="id" :value="id">{{ id }}</option></UiSelect></label>
           <label class="attention-filter"><input v-model="attentionOnly" type="checkbox"><span>仅失败 / 拒绝（{{ attentionCount }}）</span></label>
         </div>
-        <div class="filter-summary"><span class="muted" aria-live="polite">{{ loading ? '正在读取最近事件…' : `显示 ${filtered.length} / ${events.length} 条` }}</span><button v-if="hasFilters" class="text-button" @click="resetFilters">清除全部筛选</button></div>
+        <div class="filter-summary"><span class="muted" aria-live="polite">{{ loading ? '正在读取最近事件…' : `显示 ${filtered.length} / ${events.length} 条` }}</span><UiButton v-if="hasFilters" class="text-button" @click="resetFilters">清除全部筛选</UiButton></div>
         <p v-if="loadError" class="evidence-error" role="alert">最近记录刷新失败{{ loaded ? '，当前仍显示上次加载的事件' : '' }}，请重试。</p>
       </section>
       <div v-if="!filtered.length && !loading" class="panel empty-state"><h3>{{ events.length ? '没有符合筛选条件的事件' : loadError ? '暂时无法读取事件' : '暂无审计事件' }}</h3><p class="muted">{{ events.length ? '调整类别、任务或关键词，即可继续查找。' : '刷新记录，或发起任务、导入车辆数据后查看。' }}</p></div>
@@ -120,21 +120,21 @@ onUnmounted(() => { analysisRequest++; requests.abort(); });
             <span>声明身份 <strong>{{ event.claimedIdentity ? actorLabel(event.claimedIdentity) : '未声明' }}</strong></span>
             <span>已验证身份 <strong>{{ event.verifiedIdentity ? actorLabel(event.verifiedIdentity) : '本条记录未提供' }}</strong></span>
           </div>
-          <div class="event-actions"><button v-if="auditTaskId(event)" class="task-link" :title="`仅查看任务 ${auditTaskId(event)}`" @click="followTask(auditTaskId(event))">关联任务 · {{ auditTaskId(event) }}</button><span v-else class="muted">无关联任务编号</span><button class="text-button" @click="chooseEvent(event.id)">分析此事件 ↗</button></div>
+          <div class="event-actions"><UiButton v-if="auditTaskId(event)" class="task-link" :title="`仅查看任务 ${auditTaskId(event)}`" @click="followTask(auditTaskId(event))">关联任务 · {{ auditTaskId(event) }}</UiButton><span v-else class="muted">无关联任务编号</span><UiButton class="text-button" @click="chooseEvent(event.id)">分析此事件 ↗</UiButton></div>
           <details class="event-details" :open="expanded.has(event.id)" @toggle="toggleDetails($event, event.id)"><summary>查看事件详情与哈希凭据 <span>{{ event.kind }}</span></summary><div v-if="expanded.has(event.id)" class="event-detail-content"><ProtocolSection :section="{ title: '事件元数据', data: event.details }"/><ProtocolSection :section="{ title: '审计链原始凭据', data: event }"/></div></details>
         </article>
       </section>
     </div>
 
     <section v-else-if="pane === 'analysis'" class="panel">
-      <div class="panel-heading"><div><h2>证据分析<span v-if="selectedId" class="group-count">#{{ selectedId }}</span></h2><p class="muted scope-note">先校验审计链，再分别给出事实、可能原因、建议与边界。</p></div><button class="secondary" :disabled="analyzing" @click="chooseEvent()">分析最近相关事件 ↗</button></div>
-      <div v-if="selectedEvent" class="analysis-target"><strong>{{ describeAuditEvent(selectedEvent).title }}</strong><span>{{ time(selectedEvent.at) }} · {{ selectedEvent.kind }}</span><button v-if="auditTaskId(selectedEvent)" class="text-button" @click="followTask(auditTaskId(selectedEvent))">查看同一任务的事件 ↗</button></div>
+      <div class="panel-heading"><div><h2>证据分析<span v-if="selectedId" class="group-count">#{{ selectedId }}</span></h2><p class="muted scope-note">先校验审计链，再分别给出事实、可能原因、建议与边界。</p></div><UiButton class="secondary" :disabled="analyzing" @click="chooseEvent()">分析最近相关事件 ↗</UiButton></div>
+      <div v-if="selectedEvent" class="analysis-target"><strong>{{ describeAuditEvent(selectedEvent).title }}</strong><span>{{ time(selectedEvent.at) }} · {{ selectedEvent.kind }}</span><UiButton v-if="auditTaskId(selectedEvent)" class="text-button" @click="followTask(auditTaskId(selectedEvent))">查看同一任务的事件 ↗</UiButton></div>
       <p v-if="analyzing" class="muted" role="status">正在校验审计链并读取所选证据…</p>
       <p v-else-if="analysisError" class="evidence-error" role="alert">分析未完成，请查看错误提示并重试。较早的事件可能超出当前可分析范围。</p>
       <div v-else-if="analysis" class="analysis-grid"><section v-for="field in fields" :key="field.key"><h3>{{ field.label }}</h3><ul v-if="analysis[field.key].length"><li v-for="(item, index) in analysis[field.key]" :key="index"><MarkdownContent :content="item" /></li></ul><p v-else class="muted">本次未提供此项结论。</p></section></div>
       <p v-else class="muted">从“分类事件”选择一条记录，或分析最近相关事件。</p>
-      <div v-if="analysis?.evidenceIds.length" class="analysis-references"><span class="muted">引用证据</span><button v-for="id in analysis.evidenceIds" :key="id" class="text-button" @click="chooseEvent(id)">#{{ id }}</button></div>
-      <div class="button-row"><button class="secondary" @click="pane = 'events'">返回分类事件</button><button v-if="analysisError" class="secondary" :disabled="analyzing" @click="investigate(selectedId)">重试分析</button></div>
+      <div v-if="analysis?.evidenceIds.length" class="analysis-references"><span class="muted">引用证据</span><UiButton v-for="id in analysis.evidenceIds" :key="id" class="text-button" @click="chooseEvent(id)">#{{ id }}</UiButton></div>
+      <div class="button-row"><UiButton class="secondary" @click="pane = 'events'">返回分类事件</UiButton><UiButton v-if="analysisError" class="secondary" :disabled="analyzing" @click="investigate(selectedId)">重试分析</UiButton></div>
     </section>
 
     <div v-else class="integrity-sections">
@@ -142,9 +142,9 @@ onUnmounted(() => { analysisRequest++; requests.abort(); });
         <div v-if="verification" class="verification-note" :class="{ invalid: !verification.valid }"><strong>{{ verification.valid ? '上次完整校验通过' : '上次完整校验失败' }}</strong><p>{{ verification.reason }}</p><small>校验时间：{{ time(verification.verifiedAt) }} · 当时共 {{ verification.count }} 条事件</small></div>
         <p v-else class="muted">尚无可用的完整校验结果。新增审计记录后，刷新记录并重新校验可获取最新状态。</p>
         <p class="muted">校验会核对事件顺序、前驱哈希、事件摘要及签名检查点。通过校验说明记录完整性符合检查条件，事件身份与行为结论仍须结合具体证据判断。</p>
-        <button class="primary" :disabled="verifying" @click="verify">{{ verifying ? '正在校验…' : '重新完整校验' }}</button>
+        <UiButton class="primary" :disabled="verifying" @click="verify">{{ verifying ? '正在校验…' : '重新完整校验' }}</UiButton>
       </section>
-      <section class="panel"><div class="panel-heading"><div><h2>签名检查点</h2><p class="muted scope-note">保留审计链长度、末端摘要与报告服务签名，方便后续比较。</p></div><button class="secondary" :disabled="checkpointBusy" @click="signCheckpoint">{{ checkpointBusy ? '读取中…' : '读取当前检查点' }}</button></div>
+      <section class="panel"><div class="panel-heading"><div><h2>签名检查点</h2><p class="muted scope-note">保留审计链长度、末端摘要与签名报告服务签名，方便后续比较。</p></div><UiButton class="secondary" :disabled="checkpointBusy" @click="signCheckpoint">{{ checkpointBusy ? '读取中…' : '读取当前检查点' }}</UiButton></div>
         <p class="muted">读取后可复制原文另存到受保护位置；本机目录本身依赖宿主机信任。</p><ProtocolSection v-if="checkpoint" :section="{ title: '已读取的签名检查点', data: checkpoint }"/>
       </section>
     </div>

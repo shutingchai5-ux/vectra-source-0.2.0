@@ -21,6 +21,7 @@ const byAction: Record<string, readonly ProtocolId[]> = {
   "三方秘密分享计算": ["tls", "sharing", "signature"],
   "任务与本地输入认证": ["signature", "encryption"],
   "生成秘密分享多项式": ["sharing"],
+  "完成跨端份额交换": ["tls", "signature", "sharing"],
   "接收并确认输入份额": ["tls", "sharing"],
   "发送输入份额并核对回执": ["tls", "sharing"],
   "计算本地聚合份额": ["sharing"],
@@ -50,8 +51,12 @@ export function securityProtocolsForStep(step: Pick<Step, "kind" | "action" | "p
 export interface MathExplanation { title: string; latex: string; meaning: string }
 export function mathematicsForStep(step: Step, query?: StatisticsQuery): MathExplanation[] {
   if (step.kind === "model") return [];
+  if (step.action === "任务与本地输入认证" && query?.dataset === "reservation_plans") return [{ title: "按计划时段起点选择", latex: String.raw`t_{\mathrm{start}}\le t_{\mathrm{slot}}<t_{\mathrm{end}}`, meaning: "只选择批准入口和区间内的计划时段起点。半小时时段不拆分；申报计划不是已经发生的车辆事件。" }];
   switch (step.action) {
-    case "任务与本地输入认证": return [{ title: "批准的采样区间", latex: String.raw`t_{\mathrm{start}}\le t_r<t_{\mathrm{end}}`, meaning: "只使用批准路段中含起点、不含终点的采样记录。" }];
+    case "任务与本地输入认证": return query?.dataset === "park_visits" ? [
+      { title: "按到达或离园选取车次", latex: String.raw`t_{\mathrm{start}}\le t_{\mathrm{cohort}}<t_{\mathrm{end}}`, meaning: query.cohort === "departures" ? "使用离园时间选取已完成车次。" : "使用到达入口队列时间选取车次，尚未离园也纳入覆盖计数。" },
+      { title: "从实际事件计算时长", latex: String.raw`w_{\mathrm{queue}}=\frac{t_{\mathrm{gateStart}}-t_{\mathrm{arrival}}}{60000},\qquad w_{\mathrm{turnaround}}=\frac{t_{\mathrm{departure}}-t_{\mathrm{arrival}}}{60000}`, meaning: "时间戳为毫秒，换算为分钟。任一端点缺失就不提供该时长，不补零，也不以当前时间代替未知离园时间。" },
+    ] : [{ title: "批准的采样区间", latex: String.raw`t_{\mathrm{start}}\le t_r<t_{\mathrm{end}}`, meaning: "只使用批准路段中含起点、不含终点的采样记录。" }];
     case "生成秘密分享多项式": return [
       { title: "把可含小数的数值转为整数", latex: String.raw`z_r=\operatorname{round}(10^4 u_r)`, meaning: "u 是所用字段的原始数值，例如速度、里程或能耗；放大一万倍再取整。计数项不需要这种放大。" },
       { title: "为每项统计量生成随机份额", latex: String.raw`f_{i,k}(x)=(s_{i,k}+a_{i,k}x)\bmod p,\qquad x\in\{1,2,3\},\quad p=2^{127}-1`, meaning: "i 表示提供输入的节点，k 表示第几项统计量；s 是本地统计量，a 是本次独立随机数，x 对应接收份额的节点。" },
@@ -69,7 +74,7 @@ export function mathematicsForStep(step: Step, query?: StatisticsQuery): MathExp
 function metricMathematics(query?: StatisticsQuery): MathExplanation[] {
   const formulas: Record<string, { latex: string; meaning: string }> = {
     count: { latex: String.raw`N=\sum_{i=1}^{3}n_i`, meaning: "相加各节点满足条件的有效样本数。" },
-    vehicle_count: { latex: String.raw`C=\sum_{i=1}^{3}\left|\operatorname{unique}(V_i)\right|`, meaning: "各节点内按车辆编号去重后相加；同一车辆固定归属同一节点。" },
+    vehicle_count: { latex: String.raw`C=\sum_{i=1}^{3}\left|\operatorname{unique}(V_i)\right|`, meaning: "园区车次按完整车牌号去重后相加；同一车牌固定归属同一家承运商。历史采样数据沿用原始车辆标识。" },
     sum: { latex: String.raw`S_{\mathrm{value}}=\frac{S}{Q},\qquad Q=10^4`, meaning: "S 为重构后的定点总和，除以编码倍率恢复业务单位。" },
     mean: { latex: String.raw`\bar v=\frac{S}{QN},\qquad Q=10^4,\quad N>0`, meaning: "用全部有效样本总和除以样本数；分母为零时返回无数据。" },
     variance: { latex: String.raw`\sigma^2=\max\left(0,\frac{S_2}{Q^2N}-\left(\frac{S}{QN}\right)^2\right)`, meaning: "利用编码后的平方和、总和与有效样本数，计算总体方差。" },
@@ -77,7 +82,7 @@ function metricMathematics(query?: StatisticsQuery): MathExplanation[] {
     ratio: { latex: String.raw`P=\frac{N_{\mathrm{match}}}{N_{\mathrm{valid}}}\times100\%`, meaning: "符合条件的样本数占具有完整所需字段的候选样本数的百分比。" },
     ratio_of_sums: { latex: String.raw`R=\frac{S}{D}\times m`, meaning: "S、D 为分子与分母字段的编码总和，倍率 m 为批准的 1 或 100。" },
   };
-  return (query?.metrics ?? []).map(metric => ({ title: metric.label, ...formulas[metric.operation] }));
+  return (query?.metrics ?? []).map(metric => ({ title: metric.label, ...formulas[metric.operation], meaning: query?.dataset === "park_visits" ? formulas[metric.operation].meaning.replaceAll("有效样本", "有效车次").replaceAll("样本数", "车次数") : formulas[metric.operation].meaning }));
 }
 
 // Keep original report/protocol data intact; adapt known historical expressions at render time.

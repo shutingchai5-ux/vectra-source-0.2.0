@@ -6,7 +6,7 @@ import { atomicWrite, canonical, seal, unseal, type Security } from "./security"
 import { MAX_RECORDS, parseShanghaiDate } from "./statistics";
 
 export class Telemetry {
-  constructor(private security: Security) {
+  constructor(private security: Security, private readonly owners: readonly typeof PARTICIPANTS[number][] = PARTICIPANTS) {
     mkdirSync(join(security.root, "telemetry"), { recursive: true });
     if (!existsSync(join(security.root, "telemetry", "catalog.json")) || this.catalog().source !== "import") this.publish([]);
     const catalog = this.catalog();
@@ -15,7 +15,13 @@ export class Telemetry {
   catalog(): DataCatalog { return JSON.parse(readFileSync(join(this.security.root, "telemetry", "catalog.json"), "utf8")); }
   snapshot(): TelemetrySnapshot {
     const catalog = this.catalog(), { version } = catalog;
-    return { version, catalog, records: PARTICIPANTS.flatMap(id => readTelemetry(this.security, version, id)) };
+    return { version, catalog, records: this.owners.flatMap(id => readTelemetry(this.security, version, id)) };
+  }
+  importCarrier(carrierId: typeof PARTICIPANTS[number], value: unknown, expectedVersion?: string) {
+    if (expectedVersion !== undefined && expectedVersion !== this.catalog().version) throw error("dataset_changed", "采样数据已更新，请重新载入后保存。", 409);
+    if (!Array.isArray(value) || value.some(row => !row || typeof row !== "object" || Array.isArray(row) || row.participant !== undefined && row.participant !== carrierId)) throw error("carrier_scope_forbidden", "当前角色只能保存本承运商的采样记录。", 403);
+    const next = [...this.snapshot().records.filter(row => row.participant !== carrierId), ...value.map(row => ({ ...row, participant: carrierId }))];
+    return next.length ? this.import(next, expectedVersion) : this.publish([]);
   }
   import(value: unknown, expectedVersion?: string) {
     if (expectedVersion !== undefined && (typeof expectedVersion !== "string" || expectedVersion !== this.catalog().version)) throw error("dataset_changed", "车辆数据已由其他操作更新，请重新载入当前数据后再保存。草稿未被清空。", 409);
@@ -39,7 +45,7 @@ export class Telemetry {
   }
   private publish(records: TelemetryRecord[]) {
     const version = randomUUID(), folder = join(this.security.root, "telemetry", version); mkdirSync(folder);
-    for (const id of PARTICIPANTS) {
+    for (const id of this.owners) {
       const key = readFileSync(join(this.security.root, id, "input.key"));
       atomicWrite(join(folder, `${id}.enc.json`), canonical(seal(records.filter(r => r.participant === id), key, `telemetry:${version}:${id}`)));
     }

@@ -3,7 +3,7 @@ import type { Actor } from "../conversation";
 defineProps<{ actor: Actor; compact?: boolean }>();
 </script>
 <template>
-  <span class="actor-avatar" :class="[`avatar-${actor.tone}`, { compact }]" role="img" :aria-label="`${actor.name} · ${actor.role}`">
+  <span v-if="actor.registered" class="actor-avatar" :class="[`avatar-${actor.tone}`, { compact }]" role="img" :aria-label="`${actor.name} · ${actor.level}级 · ${actor.role}`">
     <svg viewBox="0 0 32 32" aria-hidden="true">
       <g v-if="actor.icon === 'car'"><path d="m6 15 3-7h14l3 7M5 15h22v9H5zM8 24v3m16-3v3M9 19h3m8 0h3"/><path d="M12 8v7m8-7v7"/></g>
       <g v-else-if="actor.icon === 'compass'"><circle cx="16" cy="16" r="11"/><path d="m21 11-3 7-7 3 3-7zM16 2v3m0 22v3M2 16h3m22 0h3"/></g>

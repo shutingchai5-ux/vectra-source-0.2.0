@@ -1,11 +1,12 @@
 const hidden = "[REDACTED]";
-const secretField = /^(?:authorization|proxyauthorization|cookies?|setcookie|(?:api|private|session|storage|input|tls|signing)?key|apikey|accesstoken|refreshtoken|controltoken|token|password|secret|ciphertext|nonce|tag|shares?|inputs?|rawspeed|reasoning|reasoningcontent|thinking)$/i;
+const secretField = /^(?:authorization|proxyauthorization|cookies?|setcookie|(?:api|private|session|storage|input|tls|signing)?key|apikey|accesstoken|refreshtoken|controltoken|carrierroletoken|previousToken|xcarrierrole|token|password|secret|ciphertext|nonce|tag|shares?|inputs?|rawspeed|reasoning|reasoningcontent|thinking|visits?|vehicles?|platenumber|visitid|vehicleid|sourcevehicleid|records|slots|dispatchreadyat|dispatchedat|offsitearrivedat|arrivedat|gatestartedat|enteredat|readyat|servicestartedat|serviceendedat|departedat|appointmentstart|appointmentend|businessrecords|demands?|haulage|batterycapacitykwh|socpercent|targetsocpercent|minimumcommittedtrips|reservedtrips|cargotonnes|cargovolumem3|actualLoadTonnes|actualvolumem3|loadcapacitytonnes|loadcapacityvolumem3|loadcapacitypallets|loadeddistancekm|emptydistancekm|pallets|maxpowerkw)$/i;
 
 /** Both browser queues and repository logs pass through the same redaction rules. */
 export function sanitizeLogValue(value: unknown, knownSecrets: readonly string[] = []): unknown {
   const secrets = [...knownSecrets].filter(secret => secret.length >= 4).sort((a, b) => b.length - a.length);
   const seen = new WeakSet<object>();
   function text(input: string) {
+    if (input.startsWith("主智能体选取的长期记忆参考")) return "[AGENT_MEMORY_CONTEXT_REMOVED]";
     let output = input;
     for (const secret of secrets) output = output.split(secret).join(hidden);
     output = output
@@ -33,7 +34,9 @@ export function sanitizeLogValue(value: unknown, knownSecrets: readonly string[]
     const result: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(input).slice(0, 100)) {
       if (key === "__proto__" || key === "constructor" || key === "prototype") continue;
-      result[text(key)] = secretField.test(key.replace(/[^a-zA-Z]/g, "")) ? hidden : visit(item, depth + 1);
+      const memoryField = /^(?:memories|memory|memorycontext)$/i.test(key);
+      const memoryArguments = key === "arguments" && "name" in input && input.name === "remember_memory";
+      result[text(key)] = memoryField || memoryArguments || secretField.test(key.replace(/[^a-zA-Z]/g, "")) ? hidden : visit(item, depth + 1);
     }
     return result;
   }

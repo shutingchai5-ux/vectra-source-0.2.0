@@ -73,6 +73,6 @@ test("deleting a conversation cancels its jobs, removes associated data, preserv
     await live.app.deleteConversation(computing.conversationId);
     expect(live.app.store.task(computing.id)).toBeUndefined();
     const next = live.app.submit({ request: "再次统计 S101 平均速度", requestId: randomUUID(), intent: "statistics" }); await wait(next.id);
-    expect(live.app.store.task(next.id)?.result?.averageSpeed).toBe(40);
+    expect(live.app.store.task(next.id)?.result?.groups?.[0].metrics[0].value).toBe(40);
   } finally { await live?.close(); globalThis.fetch = original; rmSync(root, { recursive: true, force: true }); }
 }, 15000);

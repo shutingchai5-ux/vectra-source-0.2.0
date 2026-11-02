@@ -12,7 +12,7 @@ import { startServer } from "../src/index";
 import { runAgent } from "../src/model";
 import { Collaboration, validateAnalysis } from "../src/service";
 import { renderMarkdown } from "../../web/src/markdown";
-import { configureFixture, fixtureRecords, installFixtureProvider } from "./fixtures";
+import { configureFixture, configureFixtureModels, fixtureRecords, fixtureVisits, installFixtureProvider } from "./fixtures";
 
 test("shared input contracts, canonical numbers and Shamir interpolation", () => {
   expect(() => decode(CreateTaskSchema, { request: "统计", requestId: "valid-request", privateOutput: true })).toThrow();
@@ -43,7 +43,7 @@ test("real Bun API, three independent mTLS MPC processes, replayable events and 
     expect((await send('/api/overview')).status).toBe(401);
     const session = await send('/api/session'); cookie = session.headers.get('set-cookie')!.split(';')[0];
     expect((await send('/api/tasks', 'POST', {}, { Origin: 'https://attacker.invalid' })).status).toBe(403);
-    const request = { request: "统计 S101 平均速度", requestId: randomUUID(), intent: "statistics" };
+    const request = { request: "统计东入口过去一天平均排队时长", requestId: randomUUID(), intent: "statistics" };
     const created = await (await send('/api/tasks', 'POST', request)).json() as Task;
     expect(created.id).toBeTruthy();
     expect((await (await send('/api/tasks', 'POST', request)).json()).id).toBe(created.id);
@@ -52,7 +52,7 @@ test("real Bun API, three independent mTLS MPC processes, replayable events and 
     const deadline = Date.now() + 35000;
     while (['queued','running'].includes(task.status) && Date.now() < deadline) { await Bun.sleep(40); task = await (await send(`/api/tasks/${task.id}`)).json(); }
     expect(task.error, JSON.stringify(task.error)).toBeUndefined(); expect(task.status).toBe('completed');
-    expect(task.result?.averageSpeed).toBe(40); expect(task.steps.filter(step => step.metadata.source === 'worker').length).toBeGreaterThan(8);
+    expect(task.result?.groups?.[0].metrics[0].value).toBe(40); expect(task.result?.groups?.[0].coverage?.contributingCarriers).toBe(3); expect(task.steps.filter(step => step.metadata.source === 'worker').length).toBeGreaterThan(8);
     expect(task.steps.every(step => step.protocolDetails?.operations.length)).toBeTrue();
     expect(task.steps.every(step => Number.isInteger(step.phase) && step.phase! >= 1 && step.phase! <= 8)).toBeTrue();
     expect([...new Set(task.steps.map(step => step.phase))].sort()).toEqual([2, 3, 4, 5, 6, 7, 8]);
@@ -61,15 +61,15 @@ test("real Bun API, three independent mTLS MPC processes, replayable events and 
     expect(task.steps.find(step => step.action === '重构总和并签署批准输出')?.phase).toBe(6);
     expect(task.steps.find(step => step.action === '证据分析完成')?.phase).toBe(7);
     expect(task.steps.find(step => step.action === '报告规范化与签名')?.phase).toBe(8);
-    const inputStep = task.steps.find(step => step.agent === 'vehicle-a' && step.action === '任务与本地输入认证')!;
+    const inputStep = task.steps.find(step => step.agent === 'carrier-a' && step.action === '任务与本地输入认证')!;
     const materialPath = `/api/tasks/${task.id}/steps/${inputStep.id}/materials`;
     expect((await send(materialPath, 'GET', undefined, { Origin: 'https://attacker.invalid' })).status).toBe(403);
     expect((await send(materialPath, 'GET', undefined, { 'Sec-Fetch-Site': 'same-site' })).status).toBe(403);
     const materials = await (await send(materialPath)).json() as ProtocolMaterials;
-    const privateKey = readFileSync(join(root, 'pki', 'vehicle-a', 'signing.key'), 'utf8');
+    const privateKey = readFileSync(join(root, 'pki', 'carrier-a', 'signing.key'), 'utf8');
     expect(materials.sections.some(section => section.data === privateKey)).toBeTrue();
-    expect(materials.sections.some(section => (section.data as any)?.speed === 60)).toBeTrue();
-    const polynomialStep = task.steps.find(step => step.agent === 'vehicle-a' && step.action === '生成秘密分享多项式')!;
+    expect(materials.sections.some(section => (section.data as any)?.records?.[0]?.queueMinutes === 60)).toBeTrue();
+    const polynomialStep = task.steps.find(step => step.agent === 'carrier-a' && step.action === '生成秘密分享多项式')!;
     const polynomialMaterials = await (await send(`/api/tasks/${task.id}/steps/${polynomialStep.id}/materials`)).json() as ProtocolMaterials;
     const polynomial = polynomialMaterials.sections[0].data as any;
     expect(polynomial.shares.map((share: any) => share.value)).toEqual([1n, 2n, 3n].map(x => mod(BigInt(polynomial.secret) + BigInt(polynomial.coefficient) * x).toString()));
@@ -112,7 +112,7 @@ test("model requests use approved tools, redact credentials and honor typed comp
   let round = 0, handled = false;
   globalThis.fetch = (async (_input: unknown, options: RequestInit) => {
     const request = JSON.parse(String(options.body)); expect(request.messages.some((message: any) => 'reasoning_content' in message)).toBeFalse();
-    if (request.tools.some((t: any) => t.function.name === 'submit_statistics_plan')) return Response.json({ choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: randomUUID(), type: 'function', function: { name: 'submit_statistics_plan', arguments: JSON.stringify({ roads: ['S101'], start: Date.now() - 60000, end: Date.now(), timeZone: 'Asia/Shanghai', metrics: [{ label: '平均速度', operation: 'mean', field: 'speed' }] }) } }] } }] });
+    if (request.tools.some((t: any) => t.function.name === 'submit_statistics_plan')) return Response.json({ choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: randomUUID(), type: 'function', function: { name: 'submit_statistics_plan', arguments: JSON.stringify({ dataset: 'park_visits', cohort: 'arrivals', roads: ['东入口'], start: Date.now() - 86400000, end: Date.now()-1000, timeZone: 'Asia/Shanghai', metrics: [{ label: '平均排队时长', operation: 'mean', field: 'queueMinutes' }] }) } }] } }] });
     return Response.json({ choices: [{ message: ++round === 1 ? { role: 'assistant', content: '读取身份', reasoning_content: 'must-never-persist', tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'identity_status', arguments: '{}' } }] } : { role: 'assistant', content: '## 完成\nsecret-key' } }] });
   }) as typeof fetch;
   try {
@@ -121,10 +121,10 @@ test("model requests use approved tools, redact credentials and honor typed comp
     expect(handled).toBeTrue(); expect(result).toContain('[凭据已隐藏]'); expect(JSON.stringify(progress)).not.toContain('must-never-persist');
     const folder = mkdtempSync(join(tmpdir(), 'vectra-test-contract-'));
     const app = await Collaboration.open({ ...config(), dataDir: folder, logDir: join(folder, "logs"), cooldown: 0 });
-    app.telemetry.import(fixtureRecords());
+    app.telemetry.import(fixtureRecords()); app.park.import(fixtureVisits(), app.park.catalog().version);
     try {
-      app.settings.save({ mode:'llm', provider:'custom', baseUrl:'https://example.invalid/v1', model:'test', apiKey:'secret-key' });
-      const task = app.submit({ request:'统计平均速度', requestId:randomUUID(), intent:'statistics' });
+      configureFixtureModels(app, "secret-key");
+      const task = app.submit({ request:'统计平均排队时长', requestId:randomUUID(), intent:'statistics' });
       const deadline = Date.now()+2000;
       while (['queued','running'].includes(app.store.task(task.id)!.status) && Date.now()<deadline) await Bun.sleep(10);
       expect(app.store.task(task.id)?.status).toBe('failed');
@@ -135,7 +135,7 @@ test("model requests use approved tools, redact credentials and honor typed comp
         const payload = JSON.parse(String(options.body)), names = payload.tools.map((tool: any) => tool.function.name);
         const last = payload.messages.at(-1);
         const call = (name: string, args: unknown = {}) => Response.json({ choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: randomUUID(), type: 'function', function: { name, arguments: JSON.stringify(args) } }] } }] });
-        if (names.includes('submit_statistics_plan')) return call('submit_statistics_plan', { roads: ['S101'], start: Date.now()-60000, end: Date.now(), timeZone: 'Asia/Shanghai', metrics: [{ label: '平均速度', operation: 'mean', field: 'speed' }] });
+        if (names.includes('submit_statistics_plan')) return call('submit_statistics_plan', { dataset: 'park_visits', cohort: 'arrivals', roads: ['东入口'], start: Date.now()-86400000, end: Date.now()-1000, timeZone: 'Asia/Shanghai', metrics: [{ label: '平均排队时长', operation: 'mean', field: 'queueMinutes' }] });
         if (names.includes('submit_analysis')) {
           if (last.role === 'user') return call('query_events');
           const queried = JSON.parse(last.content);
@@ -143,19 +143,19 @@ test("model requests use approved tools, redact credentials and honor typed comp
         }
         expect(names).not.toContain('verify_latest_report');
         if (last.role === 'user') return call('compute_statistics');
-        if (!payload.messages.some((message: any) => message.tool_calls?.some((item: any) => item.function.name === 'investigate'))) return call('investigate');
+        if (!payload.messages.some((message: any) => message.tool_calls?.some((item: any) => item.function.name === 'delegate_analysis'))) return call('delegate_analysis');
         return Response.json({ choices: [{ message: { role: 'assistant', content: '## 统计完成\n\n实际均值 **40 km/h**。' } }] });
       }, { preconnect: original.preconnect }) as typeof fetch;
-      const success = app.submit({ request:'统计 S101 路段过去 60 秒的平均速度，保护车辆输入并生成签名报告。', requestId:randomUUID(), intent:'statistics' });
+      const success = app.submit({ request:'统计 S101 路段过去一天的平均排队时长，保护车辆输入并生成签名报告。', requestId:randomUUID(), intent:'statistics' });
       const completedBy = Date.now() + 25000;
       while (['queued','running'].includes(app.store.task(success.id)!.status) && Date.now() < completedBy) await Bun.sleep(20);
       const completed = app.store.task(success.id)!;
       expect(completed.error, JSON.stringify(completed.error)).toBeUndefined(); expect(completed.status).toBe('completed');
-      expect(completed.result?.averageSpeed).toBe(40); expect(app.verifyReport(app.report(success.id)).valid).toBeTrue();
+      expect(completed.result?.groups?.[0].metrics[0].value).toBe(40); expect(app.verifyReport(app.report(success.id)).valid).toBeTrue();
       expect(completed.steps.some(step => step.action === 'submit_analysis' && step.status === 'completed')).toBeTrue();
       expect(completed.steps.filter(step => step.action === 'query_events' && step.status === 'completed')).toHaveLength(1);
       expect(completed.steps.filter(step => step.action === 'submit_analysis' && step.status === 'completed')).toHaveLength(1);
-      expect(completed.steps.filter(step => step.action === '模型请求').every(step => step.protocolDetails?.sections?.some(section => section.title === '实际请求正文'))).toBeTrue();
+      expect(completed.steps.filter(step => step.action === '模型请求').every(step => step.protocolDetails?.sections?.some(section => section.title === '公开请求正文'))).toBeTrue();
     } finally { await app.close(); rmSync(folder,{recursive:true,force:true}); }
   } finally { globalThis.fetch = original; }
 }, 30000);

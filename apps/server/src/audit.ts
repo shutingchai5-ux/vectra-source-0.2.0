@@ -8,7 +8,7 @@ import { Store } from "./store";
 export class Audit {
   lastVerification: (Verification & { verifiedAt: number; count: number }) | null = null;
   private checkpointPath: string;
-  constructor(private store: Store, private security: Security, private observe?: (event: AuditEvent) => void) { this.checkpointPath = join(store.root, "audit.checkpoint.json"); }
+  constructor(private store: Store, private security: Security, private observe?: (event: AuditEvent) => void, private signer: "report" | "carrier-a" | "carrier-b" | "carrier-c" = "report") { this.checkpointPath = join(store.root, "audit.checkpoint.json"); }
   count() { return this.store.db.query<{ n: number }, []>("SELECT COUNT(*) n FROM audit").get()!.n; }
   list(limit = 80): AuditEvent[] { return this.store.db.query<{ body: string }, [number]>("SELECT body FROM audit ORDER BY id DESC LIMIT ?").all(limit).map(row => JSON.parse(row.body)); }
   private chain() {
@@ -22,11 +22,11 @@ export class Audit {
   }
   private checkAnchor(count: number, head: string) {
     if (!existsSync(this.checkpointPath)) { if (count) throw error("checkpoint_missing", "审计检查点缺失。", 403); return; }
-    const payload = this.security.verify(JSON.parse(readFileSync(this.checkpointPath, "utf8")), "report");
+    const payload = this.security.verify(JSON.parse(readFileSync(this.checkpointPath, "utf8")), this.signer);
     if (payload.type !== "audit-checkpoint-v1" || payload.count !== count || payload.head !== head) throw error("checkpoint_mismatch", "审计链与签名检查点不一致。", 403);
   }
   private saveAnchor(count: number, head: string) {
-    const checkpoint = this.security.sign("report", { type: "audit-checkpoint-v1", count, head, at: Date.now() });
+    const checkpoint = this.security.sign(this.signer, { type: "audit-checkpoint-v1", count, head, at: Date.now() });
     atomicWrite(this.checkpointPath, canonical(checkpoint)); return checkpoint;
   }
   append(kind: string, details: JsonObject, claimedIdentity: string | null = null, verifiedIdentity: string | null = null) {

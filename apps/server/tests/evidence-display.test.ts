@@ -1,6 +1,9 @@
-import { expect, test } from "bun:test";
+import { expect, test, beforeEach } from "bun:test";
 import type { AuditEvent } from "@vectra/shared";
 import { describeAuditEvent, evidenceCategories, filterEvidence, needsAttention, type EvidenceFilters } from "../../web/src/evidence";
+import { setRegisteredIdentities } from "../../web/src/park-state";
+import { fixtureIdentities } from "./fixtures";
+beforeEach(() => setRegisteredIdentities(fixtureIdentities()));
 
 const event = (id: number, kind: string, extra: Partial<AuditEvent> = {}): AuditEvent => ({ id, kind, at: 0, details: {}, claimedIdentity: null, verifiedIdentity: null, prevHash: "previous", hash: "hash", ...extra });
 const filters: EvidenceFilters = { category: "all", keyword: "", taskId: "", attentionOnly: false };
@@ -34,7 +37,7 @@ test("category, task, attention and Chinese or raw keyword searches compose and 
     event(4, "request_rejected", { details: { taskId: "task-a", code: "replay" } }),
   ];
   expect(filterEvidence(events, { ...filters, category: "security", taskId: "task-a", attentionOnly: true, keyword: "REPLAY" }).map(item => item.id)).toEqual([4, 1]);
-  expect(filterEvidence(events, { ...filters, keyword: "任务管家" }).map(item => item.id)).toEqual([3, 1]);
+  expect(filterEvidence(events, { ...filters, keyword: "园区协调 Agent" }).map(item => item.id)).toEqual([3, 1]);
   expect(filterEvidence(events, { ...filters, keyword: "身份与安全" }).map(item => item.id)).toEqual([4, 3, 1]);
   expect(filterEvidence(events, { ...filters, keyword: "#2" }).map(item => item.id)).toEqual([2]);
   expect(filterEvidence(events, { ...filters, taskId: "missing" })).toEqual([]);

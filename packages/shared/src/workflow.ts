@@ -3,10 +3,10 @@ export type ConversationPhase = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
 export const CONVERSATION_PHASES = [
   { id: 1, title: "请求受理", description: "登记消息、关联会话并等待执行。" },
   { id: 2, title: "查询规划", description: "明确查询范围，锁定时间、指标和数据版本。" },
-  { id: 3, title: "签名授权", description: "检查查询间隔，为任务签名并向路侧安全网关申请授权。" },
-  { id: 4, title: "节点准备", description: "启动计算节点，检查授权并解密各自的数据，准备本地统计量。" },
-  { id: 5, title: "份额交换", description: "在加密连接中交换数据碎片，并计算各节点的汇总份额。" },
-  { id: 6, title: "输出重构", description: "从汇总份额还原批准的统计结果，核对来源与任务范围。" },
+  { id: 3, title: "签名授权", description: "检查查询间隔，为任务签名并向安全授权服务申请授权。" },
+  { id: 4, title: "节点准备", description: "联系企业协作节点，检查授权并解密各自的数据，准备本地统计量。" },
+  { id: 5, title: "份额交换", description: "在加密连接中交换数据碎片，并计算各承运商协作节点的聚合份额。" },
+  { id: 6, title: "输出重构", description: "从聚合份额还原批准的统计结果，核对来源与任务范围。" },
   { id: 7, title: "证据分析", description: "核对真实证据，完成分析与公开解释。" },
   { id: 8, title: "报告交付", description: "核对完成条件，签名、验证并保存报告。" },
 ] as const;
@@ -19,13 +19,14 @@ const actionPhases: Record<string, ConversationPhase> = {
   "接收并确认输入份额": 5, "发送输入份额并核对回执": 5, "计算本地聚合份额": 5,
   "接收并确认聚合份额": 6, "发送聚合份额并确认": 6, "重构总和并签署批准输出": 6, "复核三方输出签名与绑定": 6, "协议完成": 6,
   "证据调查委托": 7, "证据分析完成": 7, "执行统计任务必需分析": 7, investigate: 7, query_events: 7, submit_analysis: 7,
+  delegate_statistics_planning: 2, delegate_analysis: 7,
   "任务产物与审计链校验": 8, "报告规范化与签名": 8, "报告签名与任务绑定复核": 8, "报告认证加密与回读": 8, "发布报告与完成对话": 8, verify_latest_report: 8,
 };
 
 function knownPhase(step: PhaseStep): ConversationPhase | undefined {
   if (Number.isInteger(step.phase) && step.phase! >= 1 && step.phase! <= 8) return step.phase;
-  if (step.agent === "统计规划 Agent") return 2;
-  if (step.agent === "信息安全分析 Agent") return 7;
+  if (step.agent === "planner" || step.agent === "统计规划 Agent") return 2;
+  if (step.agent === "analyst" || step.agent === "运营分析 Agent" || step.agent === "信息安全分析 Agent") return 7;
   if (step.action === "三方秘密分享计算") return step.status === "running" ? 4 : 6;
   return actionPhases[step.action] ?? (step.kind === "report" ? 8 : undefined);
 }

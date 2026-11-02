@@ -1,21 +1,29 @@
 {
   "name": "vectra",
-  "version": "1.0.3",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "packageManager": "bun@1.4.3",
   "engines": {
     "bun": ">=1.4.3"
   },
-  "workspaces": ["apps/*", "packages/*"],
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
     "dev": "bun scripts/dev.ts",
-    "dev:server": "bun --watch apps/server/src/index.ts",
+    "dev:server": "bun --watch scripts/serve.ts park",
+    "dev:all": "bun scripts/dev.ts --all",
     "dev:web": "vite --config apps/web/vite.config.ts",
     "build": "vite build --config apps/web/vite.config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json && vue-tsc --noEmit -p apps/web/tsconfig.json",
-    "start": "bun apps/server/src/index.ts",
+    "start": "bun scripts/serve.ts park",
+    "start:park": "bun scripts/serve.ts park",
+    "start:carrier": "bun scripts/serve.ts companies",
+    "deploy:init": "bun scripts/deploy-init.ts",
     "stop": "bun scripts/stop.ts",
+    "migrate:identities": "bun scripts/migrate-identities.ts",
     "test": "bun test apps/server/tests",
     "check": "bun run typecheck && bun run build",
     "package": "bun scripts/package.ts"
@@ -24,6 +32,7 @@
     "@peculiar/x509": "2.2.0",
     "canonicalize": "5.1.0",
     "effect": "3.22.3",
+    "element-plus": "2.14.7",
     "katex": "0.19.0",
     "markdown-it": "15.0.3",
     "pinia": "^3.0.4",

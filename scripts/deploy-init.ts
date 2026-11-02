@@ -1,0 +1,11 @@
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
+import { provisionDeployments } from "../apps/server/src/provision";
+import { ROOT } from "../apps/server/src/config";
+const args=process.argv.slice(2),value=(flag:string)=>args.includes(flag)?args[args.indexOf(flag)+1]:undefined;
+const root=resolve(ROOT,value("--root")??"runtime-deploy"),legacy=resolve(ROOT,value("--legacy")??"runtime-ts");
+const result=await provisionDeployments(root,{...(!args.includes("--fresh")&&existsSync(resolve(legacy,"pki/registry.json"))?{legacyRoot:legacy}:{}),logsRoot:resolve(ROOT,"logs")});
+console.log("园区与企业统一入口已准备，企业使用不同账号登录，已有业务数据和密码保持不变。");
+if(result.enterprisePortal)console.log("企业统一入口："+result.enterprisePortal.url+"\n  配置："+result.enterprisePortal.config);
+for(const item of result.deployments)console.log(item.identity+" · "+item.url+"\n  配置："+item.config+"\n  首次凭据文件："+item.credentials);
+console.log("凭据和私钥不进入源码包或Git。企业用户只领取本公司登录凭据，运行目录由部署管理员保管。");

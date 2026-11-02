@@ -1,6 +1,7 @@
 import { Effect } from "effect";
 import { AppError, error, shanghaiTime } from "@vectra/shared";
 import { clientLogsReady, recordClient } from "./diagnostics";
+import { portalExpired,portalSession } from "./portal";
 
 export function request<A>(path: string, options: RequestInit = {}) {
   return Effect.tryPromise({
@@ -11,9 +12,12 @@ export function request<A>(path: string, options: RequestInit = {}) {
       let response: Response;
       try { response = await fetch(path, { ...options, credentials: "same-origin", headers, signal: options.signal ? AbortSignal.any([signal, options.signal]) : signal }); }
       catch { if (signal.aborted || options.signal?.aborted) throw error("cancelled", "请求已取消。", 409); diagnostic("connection_failed", "无法连接本地服务。"); throw error("connection_failed", "无法连接本地服务；热更新期间会自动重连。", 503); }
+      const owner=response.headers.get("X-Company-Identity"),session=portalSession.value;
+      if(!path.startsWith("/api/portal")&&owner&&session?.role==="carrier"&&session.carrierId&&owner!==session.carrierId){portalExpired();throw error("portal_account_changed","其他标签页已切换企业账号，请刷新或重新登录后继续。",401);}
       let body: unknown; try { body = await response.json(); } catch { diagnostic("invalid_response", "服务未返回有效 JSON。", response.status); throw error("invalid_response", "服务未返回有效数据。", 502); }
       if (!response.ok) {
         const data = body as { code?: string; message?: string };
+        if(data.code==="portal_login_required")portalExpired();
         diagnostic(data.code || "request_failed", data.message || "请求未完成。", response.status);
         throw error(data.code ?? "request_failed", data.message ?? "请求未完成。", response.status);
       }
