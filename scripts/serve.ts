@@ -1,14 +1,12 @@
-import { existsSync } from "node:fs";
-import { resolve } from "node:path";
-import { ROOT,config } from "../apps/server/src/config";
+import { config } from "../apps/server/src/config";
 import { readEnterpriseDeployment } from "../apps/server/src/deployment";
-const requested=process.argv[2]??"park",identity=["companies","carrier-a","carrier-b","carrier-c"].includes(requested)?"companies":requested;
-if(!["park","companies"].includes(identity))throw new Error("请选择 park 或 companies；企业由登录账号区分。");
-const file=resolve(ROOT,process.env.VECTRA_DEPLOYMENT_FILE??"runtime-deploy/"+identity+"/deployment.json");
-if(!existsSync(file))throw new Error("部署尚未初始化，请先运行 bun run deploy:init。");
+import { developmentPorts, runtimeDeployment } from "./runtime";
+if(process.argv.includes("--dev"))process.env.VECTRA_DEV="1";
+const {identity,file,deployment}=runtimeDeployment(process.argv[2]);
+const binding=process.env.VECTRA_DEV==="1"?{host:"127.0.0.1",port:developmentPorts(deployment.port,process.env.VECTRA_DEV_API_PORT).apiPort}:{host:deployment.host,port:deployment.port};
 let live:{close:()=>Promise<void>};
-if(identity==="park"){process.env.VECTRA_DEPLOYMENT_FILE=file;live=await(await import("../apps/server/src/index")).startServer(config());}
-else{delete process.env.VECTRA_DEPLOYMENT_FILE;live=await(await import("../apps/carrier/src/portal")).startEnterprise(readEnterpriseDeployment(file));}
+if(deployment.role==="park"){process.env.VECTRA_DEPLOYMENT_FILE=file;live=await(await import("../apps/server/src/index")).startServer({...config(),...binding});}
+else{delete process.env.VECTRA_DEPLOYMENT_FILE;live=await(await import("../apps/carrier/src/portal")).startEnterprise({...readEnterpriseDeployment(file),...binding});}
 console.log("VECTRA "+(identity==="park"?"园区端":"企业统一入口")+"已启动。");
 let closing=false;
 async function close(code=0){if(closing)return;closing=true;try{await live.close();}catch{code=1;}process.exit(code);}

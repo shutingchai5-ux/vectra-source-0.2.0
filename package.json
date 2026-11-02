@@ -13,7 +13,7 @@
   ],
   "scripts": {
     "dev": "bun scripts/dev.ts",
-    "dev:server": "bun --watch scripts/serve.ts park",
+    "dev:server": "bun --watch scripts/serve.ts park --dev",
     "dev:all": "bun scripts/dev.ts --all",
     "dev:web": "vite --config apps/web/vite.config.ts",
     "build": "vite build --config apps/web/vite.config.ts",

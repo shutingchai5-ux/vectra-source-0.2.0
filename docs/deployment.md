@@ -6,8 +6,10 @@
 
 | 服务 | 正常入口 | 开发入口 | 启动命令 |
 |---|---|---|---|
-| 园区端 | http://127.0.0.1:8000 | http://127.0.0.1:5173 | bun run start:park / bun run dev park |
-| 企业端 | http://127.0.0.1:8101 | http://127.0.0.1:5174 | bun run start:carrier / bun run dev companies |
+| 园区端 | http://127.0.0.1:8000 | http://127.0.0.1:8000 | bun run start:park / bun run dev park |
+| 企业端 | http://127.0.0.1:8101 | http://127.0.0.1:8101 | bun run start:carrier / bun run dev companies |
+
+两种模式的公开端口均以各自 deployment.json 的 port 为准，不再单独设置 VECTRA_WEB_PORT。开发模式由 Vite 提供公开页面、热更新和同源 /api 代理，Bun 后端仅监听回环地址上的内部端口，默认在公开端口基础上加10000（超过65535时减10000），即18000、18101。内部端口冲突时，可在单端启动前设置 VECTRA_DEV_API_PORT；它不改变用户访问地址。bun run dev:server 与 bun run dev:web 分开运行时也使用同一组配置。
 
 企业 A/B/C 的默认账号分别为 carrier-a、carrier-b、carrier-c，密码各不相同。密码与账号保存在各公司目录 first-login.json，园区在 park/first-login.json。登录后公司固定绑定会话，不能通过 carrierId、角色头或历史版本编号改成其他公司。切换账号先退出，再登录。
 

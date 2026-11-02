@@ -98,10 +98,11 @@ export class ParkData {
     const catalog = this.catalog();
     return { version: catalog.version, catalog, visits: this.bindings.flatMap(c => readParkVisits(this.security, catalog.version, c.participant)) };
   }
-  forCarrier(carrierId: ParkVisit["carrierId"]): ParkSnapshot {
+  forCarrier(carrierId: ParkVisit["carrierId"], version?: string): ParkSnapshot {
     if (!this.owners.includes(carrierId)) throw error("carrier_scope_forbidden", "本部署不持有该企业的车次。", 403);
-    const snapshot = this.snapshot(), visits = snapshot.visits.filter(visit => visit.carrierId === carrierId), catalog = this.describe(visits, snapshot.catalog.settings, snapshot.version, snapshot.catalog.updatedAt);
-    return { version: snapshot.version, visits, catalog: { ...catalog, nodes: catalog.nodes.filter(node => node.id === carrierId), carrierId, scopeVersion: hash(visits) } };
+    const source = version ? readParkCatalog(this.security, version) : this.catalog(), visits = readParkVisits(this.security, source.version, carrierId);
+    const catalog = this.describe(visits, source.settings, source.version, source.updatedAt);
+    return { version: source.version, visits, catalog: { ...catalog, nodes: catalog.nodes.filter(node => node.id === carrierId), carrierId, scopeVersion: hash(visits) } };
   }
   /** Only a validated confirmation creates a live visit. Selecting a vehicle never calls this operation. */
   queueCarrier(carrierId: ParkVisit["carrierId"], raw: unknown): ParkSnapshot {
@@ -208,7 +209,8 @@ export class ParkData {
   private checkVersion(baseVersion: unknown) {
     if (typeof baseVersion !== "string" || baseVersion !== this.catalog().version) throw error("dataset_changed", "园区数据或名称已更新，请重新载入后保存；当前草稿仍保留。", 409);
   }
-  import(visits: unknown, baseVersion: unknown) { this.checkVersion(baseVersion); return this.publish(validateParkVisits(visits), this.catalog().settings); }
+  // Offline maintenance may supply a reference clock; HTTP callers use the real server clock.
+  import(visits: unknown, baseVersion: unknown, validationTime = Date.now()) { this.checkVersion(baseVersion); return this.publish(validateParkVisits(visits, validationTime), this.catalog().settings); }
   configure(settings: unknown, baseVersion: unknown) { this.checkVersion(baseVersion); return this.publish(this.snapshot().visits, validateParkSettings(settings)); }
   private publish(visits: ParkVisit[], settings: ParkSettings): ParkCatalog {
     if (visits.some(visit => !this.owners.includes(visit.carrierId))) throw error("carrier_scope_forbidden", "不能在本部署保存其他企业的车次。", 403);
@@ -243,6 +245,7 @@ export function readParkVisits(security: Security, version: string, participant:
 
 export const PARK_PLANNING_GUIDE = `你正在为物流园区的三家承运商执行联合运营分析。必须调用 submit_statistics_plan，提交 dataset=park_visits 和 cohort。缺省 cohort=arrivals，以 arrivedAt 按到达时间选车次，包含尚未离园车次；用户明确查询离园吞吐或本时段离园车次时用 departures，以 departedAt 选取。不得把两种口径混用。园区固定为东入口、南入口、西入口、北入口。用户提到东门、南门、西门、北门时，分别使用对应的固定入口名。用户未指定入口时查询全部四个入口；没有车次的入口也保留，其结果按实际空数据说明；缺省今天截至当前时刻，缺省指标为车次数、车辆数、平均入口排队时长、平均周转时长。各入口分别统计。start 含、end 不含，上海时区，最多31天。
 每次进园为一个全局唯一 visitId，同一车辆重复进园计多个车次。count=车次数；vehicle_count=各入口去重车辆数，跨入口不能直接相加。三个计算节点分别属于三家承运商，不是三辆车。所有节点都参与协议，但应报告所选范围实际有数据的承运商数量。
+count、vehicle_count、ratio 必须省略指标顶层的 field；筛选字段只写在 filter.field。示例：未离园车次数为 {"label":"未离园车次数","operation":"count","filter":{"field":"completed","op":"eq","value":0}}；预约准点率为 {"label":"预约准点率","operation":"ratio","filter":{"field":"appointmentOnTime","op":"eq","value":1}}。求和、均值、方差、标准差和总量比值才指定顶层数值字段 field，总量比值另须 denominatorField。
 允许字段：queueMinutes=到达入口队列至开始入园核验的分钟数；gateMinutes=开始核验至完成入园的分钟数；yardWaitMinutes=到达作业等候区至开始作业的分钟数；serviceMinutes=开始至结束作业的分钟数；turnaroundMinutes=到达入口队列至离园的分钟数。缺少任一端点即缺失，不补零，不把入园至作业的全部时间当作排队。未完成车次不提供完整周转时长。
 completed=是否已离园，0或1。完成率用 ratio + filter completed eq 1；未完成车次数用 count + filter completed eq 0。appointmentOnTime=到达是否处于[预约开始,预约结束)，0或1，缺少预约时不提供该字段；准点率用 ratio + filter appointmentOnTime eq 1。超30分钟排队比例用 ratio + filter queueMinutes gt 30，分母是有完整排队端点的车次，不能把缺失记录算成未超时。
 distanceKm 和 energyKwh 为已离园车次完整行程增量，不是采样值或累计仪表值。总里程/总用电用 sum，单车次平均用电用 mean energyKwh，百公里用电用 ratio_of_sums energyKwh/distanceKm×100（分子分母均有值的车次）。只支持电能kWh，不将其称为柴油消耗、全部运输能耗或碳排放。

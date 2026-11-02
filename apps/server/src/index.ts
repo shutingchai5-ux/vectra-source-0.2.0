@@ -143,7 +143,7 @@ export async function startServer(options = config()) {
         app.audit.append(carrierVisit[2] ? "park_lifecycle_recorded" : "park_visit_corrected", { carrierId: role.carrierId, datasetVersion: snapshot.version }); return json(snapshot);
       }
       if (path === "/api/carrier/visits") {
-        if (method === "GET") { const role = carrierRoles.require(request.headers); return json(app.park.forCarrier(role.carrierId)); }
+        if (method === "GET") { const role = carrierRoles.require(request.headers); return json(app.park.forCarrier(role.carrierId, url.searchParams.get("version") ?? undefined)); }
         if (method === "POST") {
           const data = await body(request, 4 * 1024 * 1024), role = carrierRoles.require(request.headers);
           if (!data || typeof data !== "object" || Array.isArray(data) || Object.keys(data).some(key => !["visits", "baseVersion"].includes(key))) throw error("invalid_park_data", "请提交本承运商车次和当前数据版本。", 422);
@@ -328,7 +328,7 @@ export async function startServer(options = config()) {
       headers.set("X-Request-Id", requestId);
       headers.set("X-Content-Type-Options", "nosniff"); headers.set("X-Frame-Options", "DENY"); headers.set("Referrer-Policy", "no-referrer"); headers.set("Cache-Control", "no-store");
       headers.set("Content-Security-Policy", options.dev
-        ? "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws://127.0.0.1:5173 ws://localhost:5173; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+        ? `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ${new URL(request.url).origin.replace(/^http/, "ws")}; frame-ancestors 'none'; base-uri 'self'; form-action 'self'`
         : "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
       return new Response(response.body, { status: response.status, headers });
     },

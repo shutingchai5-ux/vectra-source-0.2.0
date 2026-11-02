@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onActivated, onMounted, reactive, ref, watch } from "vue";
+import { computed, nextTick, onActivated, onDeactivated, onMounted, reactive, ref, watch } from "vue";
 import { PARK_ENTRANCES, PARK_LIFECYCLE_FIELDS, PARK_TIME_LABELS, VEHICLE_STATUSES, parkVisitStatus, isParkEntrance, isPlateNumber, normalizePlateNumber, parseParkTimestamp, shanghaiDateTime, type CarrierId, type FleetOverview, type ParkCatalog, type ParkSnapshot, type ParkVisit } from "@vectra/shared";
 import { carrierApi } from "../carrier-role";
 import { admissionIssues, admissionPayload, queueIssues, queuePayload } from "../visit-entry";
@@ -23,6 +23,7 @@ const entrySignature = () => JSON.stringify([entry, entryMode.value, entryCurren
 const entryBaseline = ref(entrySignature()), entryDirty = computed(() => entrySignature() !== entryBaseline.value);
 const correction = ref<VisitDraft>(), correctionBaseline = ref(""), correctionVersion = ref(""), correctionOriginal = ref("");
 const correctionDirty = computed(() => !!correction.value && JSON.stringify(correction.value) !== correctionBaseline.value);
+const recordDialog = ref<HTMLDialogElement>(), recordDetailsOpen = ref(false);
 const importRows = ref<VisitDraft[]>([]), importName = ref(""), importVersion = ref("");
 const dirty = computed(() => entryDirty.value || correctionDirty.value || !!importRows.value.length);
 useUnsavedChanges(() => dirty.value, "车次登记", () => props.guardNavigation !== false);
@@ -110,7 +111,23 @@ function discardCorrection() {
   if (correctionDirty.value && !window.confirm("记录更正尚未保存，是否放弃本次更正？")) return false;
   correction.value = undefined; return true;
 }
-function openRecord(row: ParkVisit) { if (row.visitId !== selectedId.value && !discardCorrection()) return; selectedId.value = row.visitId; }
+async function showRecordDetails() {
+  recordDetailsOpen.value = true; await nextTick();
+  if (recordDetailsOpen.value && recordDialog.value) {
+    if (!recordDialog.value.open) recordDialog.value.showModal();
+    recordDialog.value.scrollTop = 0;
+  }
+}
+function closeRecordDetails() {
+  if (busy.value || !discardCorrection()) return false;
+  recordDetailsOpen.value = false; recordDialog.value?.close(); return true;
+}
+function openRecord(row: ParkVisit) {
+  if (busy.value || !records.value.some(record => record.visitId === row.visitId) || row.visitId !== selectedId.value && !discardCorrection()) return false;
+  selectedId.value = row.visitId; message.value = "";
+  if (view.value === "all" || view.value === "active" || view.value === "departed" && row.departedAt !== undefined) void showRecordDetails();
+  return true;
+}
 function openActiveEntry() { if (activeEntry.value) { openRecord(activeEntry.value); view.value = parkVisitStatus(activeEntry.value) === "queued" ? "queue" : "active"; } }
 function openDeparture() { departureFilter.value = selected.value?.departedAt === undefined ? "pending" : "completed"; view.value = "departed"; message.value = ""; }
 watch(selectedId, () => { actionCurrentTime.value = true; actionAt.value = ""; distanceKm.value = ""; energyKwh.value = ""; });
@@ -136,8 +153,9 @@ async function advance() {
   message.value = field === "serviceEndedAt" ? row.vehicleId + "已结束作业，请核对离园时间后确认离园。" : row.vehicleId + "已记录“" + PARK_TIME_LABELS[field] + "”，时间为" + displayTime(updated[field]) + "，入口继续沿用" + updated.road + "。"; return true;
 }
 function beginCorrection() {
-  if (!selected.value || !discardCorrection()) return;
+  if (!selected.value || busy.value || !discardCorrection()) return false;
   correction.value = visitDraft(selected.value); correctionBaseline.value = JSON.stringify(correction.value); correctionVersion.value = version.value; correctionOriginal.value = JSON.stringify(selected.value);
+  message.value = ""; void showRecordDetails(); return true;
 }
 async function saveCorrection() {
   if (!correction.value || correctionOutdated.value || busy.value) return false;
@@ -168,6 +186,7 @@ watch(() => props.catalog.version, value => { if (loadedOnce.value && !busy.valu
 watch([view, search, entrance, departureFilter], () => { page.value = 1; if (view.value !== "admission" && !correctionDirty.value && !filtered.value.some(row => row.visitId === selectedId.value)) selectedId.value = filtered.value[0]?.visitId ?? ""; });
 onMounted(load);
 onActivated(() => { if (loadedOnce.value && !busy.value && props.catalog.version !== version.value) void load(); });
+onDeactivated(() => { recordDetailsOpen.value = false; recordDialog.value?.close(); });
 </script>
 
 <template>
@@ -224,7 +243,23 @@ onActivated(() => { if (loadedOnce.value && !busy.value && props.catalog.version
             <form v-if="selected.departedAt === undefined" class="departure-action" @submit.prevent="advance">
               <label class="visit-check"><input v-model="actionCurrentTime" type="checkbox" :disabled="busy" />使用确认时的当前上海时间</label>
               <label v-if="!actionCurrentTime" class="visit-field">实际离园时间<UiInput v-model="actionAt" type="datetime-local" step="0.001" :disabled="busy" required /></label>
-              <details class="departure-extras"><summary>补充里程与用电（可选）</summary><div class="visit-field-grid"><label class="visit-field">本车次里程（km）<UiInput v-model="distanceKm" type="number" min="0" max="1000000" step="0.0001" :disabled="busy" /></label><label class="visit-field">本车次用电（kWh）<UiInput v-model="energyKwh" type="number" min="0" max="1000000" step="0.0001" :disabled="busy" /></label></div></details>
+              <section class="departure-metrics" :aria-labelledby="'departure-metrics-title-' + scopeCarrier">
+                <div class="departure-metrics-heading"><h4 :id="'departure-metrics-title-' + scopeCarrier">补充里程与用电</h4><span class="departure-metrics-optional">可选</span></div>
+                <p class="departure-metrics-intro">填写本次完整行程，随离园确认一起保存。</p>
+                <div class="departure-metrics-grid">
+                  <div class="departure-metric-field">
+                    <label :for="'departure-distance-' + scopeCarrier">本车次完整里程</label>
+                    <UiInput :id="'departure-distance-' + scopeCarrier" v-model="distanceKm" type="number" min="0" max="1000000" step="0.0001" placeholder="未知可留空" aria-label="本车次完整里程（km）" :aria-describedby="'departure-distance-help-' + scopeCarrier" :disabled="busy"><template #suffix><span class="departure-metric-unit">km</span></template></UiInput>
+                    <small :id="'departure-distance-help-' + scopeCarrier">本次行程行驶的公里数，非里程表总读数。</small>
+                  </div>
+                  <div class="departure-metric-field">
+                    <label :for="'departure-energy-' + scopeCarrier">本车次完整用电</label>
+                    <UiInput :id="'departure-energy-' + scopeCarrier" v-model="energyKwh" type="number" min="0" max="1000000" step="0.0001" placeholder="未知可留空" aria-label="本车次完整用电（kWh）" :aria-describedby="'departure-energy-help-' + scopeCarrier" :disabled="busy"><template #suffix><span class="departure-metric-unit">kWh</span></template></UiInput>
+                    <small :id="'departure-energy-help-' + scopeCarrier">本次行程实际消耗的电量，非电池剩余电量。</small>
+                  </div>
+                </div>
+                <p class="departure-metrics-note">用于后续里程核对与用电统计。未知留空，实际为零时填 0。</p>
+              </section>
               <UiButton class="visits-primary" :disabled="busy || correctionDirty">{{ busy ? '正在保存…' : '确认离园' }}</UiButton>
             </form>
             <div v-else class="visit-completed"><p>离园已确认，完整生命周期可在“全部记录”查看。</p><UiButton class="visits-secondary" :disabled="busy" @click="resetEntry(selected)">填写再次入园信息</UiButton></div>
@@ -247,7 +282,29 @@ onActivated(() => { if (loadedOnce.value && !busy.value && props.catalog.version
           <UiButton v-if="view === 'all'" class="visits-text-button" :disabled="busy" @click="beginCorrection">查看或更正历史信息</UiButton><details class="visit-record-id"><summary>车次记录编号</summary><code>{{ selected.visitId }}</code></details>
         </aside><aside v-else class="visits-panel visit-empty">选择一条记录查看生命周期。</aside>
       </div>
-      <section v-if="correction && view === 'all'" class="visits-panel visit-correction"><div class="visits-panel-title"><div><h3>记录更正 · {{ correction.vehicleId }}</h3><p>车牌、承运商和车次编号保持原样。仅在核对实际记录后修改。</p></div><UiButton class="visits-text-button" :disabled="busy" @click="discardCorrection">关闭更正</UiButton></div><UiAlert v-if="correctionOutdated" class="visits-feedback error">该记录已更新，当前更正草稿仍保留。请取消更正并刷新后重新核对。</UiAlert><form @submit.prevent="saveCorrection"><UiFieldset :disabled="busy"><div class="visit-field-grid"><label class="visit-field">实际入口<UiSelect v-model="correction.road"><option v-for="road in PARK_ENTRANCES" :key="road" :value="road">{{ road }}</option></UiSelect></label><label v-for="field in visitTimeFields" :key="field" class="visit-field">{{ PARK_TIME_LABELS[field] }}<UiInput v-model="correction[field]" type="datetime-local" step="0.001" /></label><label class="visit-field">完整里程（km）<UiInput v-model="correction.distanceKm" type="number" min="0" max="1000000" step="0.0001" /></label><label class="visit-field">完整用电（kWh）<UiInput v-model="correction.energyKwh" type="number" min="0" max="1000000" step="0.0001" /></label></div></UiFieldset><UiButton class="visits-primary" :disabled="busy || !correctionDirty || correctionOutdated">保存本条更正</UiButton></form></section>
+      <dialog ref="recordDialog" class="visit-record-dialog" :aria-labelledby="'visit-record-title-' + scopeCarrier" @cancel.prevent="closeRecordDetails" @close="recordDetailsOpen = false">
+        <header class="visit-record-header"><div><small>{{ carrierName }}</small><h3 :id="'visit-record-title-' + scopeCarrier">车次详情<span v-if="selected"> · {{ selected.vehicleId }}</span></h3></div><UiButton type="button" class="visits-text-button" aria-label="关闭车次详情" :disabled="busy" @click="closeRecordDetails">关闭</UiButton></header>
+        <UiAlert v-if="message" class="visits-feedback" :class="{ error: failed }" role="status">{{ message }}</UiAlert>
+        <template v-if="selected">
+          <dl class="visit-record-summary"><div><dt>实际入口</dt><dd>{{ selected.road }}</dd></div><div><dt>当前状态</dt><dd>{{ stageLabel(selected) }}</dd></div><div><dt>完整里程</dt><dd>{{ selected.distanceKm === undefined ? '未记录' : selected.distanceKm + ' km' }}</dd></div><div><dt>完整用电</dt><dd>{{ selected.energyKwh === undefined ? '未记录' : selected.energyKwh + ' kWh' }}</dd></div></dl>
+          <section v-if="correction" class="visit-correction">
+            <div class="visits-panel-title"><div><h4>记录更正</h4><p>车牌、承运商和车次编号保持原样。仅在核对实际记录后修改。</p></div><UiButton type="button" class="visits-text-button" :disabled="busy" @click="discardCorrection">取消更正</UiButton></div>
+            <UiAlert v-if="correctionOutdated" class="visits-feedback error">该记录已更新，当前更正草稿仍保留。请取消更正并刷新后重新核对。</UiAlert>
+            <form @submit.prevent="saveCorrection">
+              <UiFieldset :disabled="busy"><div class="visit-field-grid">
+                <label class="visit-field">完整里程（km）<UiInput v-model="correction.distanceKm" type="number" min="0" max="1000000" step="0.0001" /></label>
+                <label class="visit-field">完整用电（kWh）<UiInput v-model="correction.energyKwh" type="number" min="0" max="1000000" step="0.0001" /></label>
+                <div class="visit-field"><span>实际入口</span><UiSelect v-model="correction.road" aria-label="实际入口" :teleported="false"><option v-for="road in PARK_ENTRANCES" :key="road" :value="road">{{ road }}</option></UiSelect></div>
+              </div><details class="visit-correction-times"><summary>核对或更正时间</summary><div class="visit-field-grid"><label v-for="field in visitTimeFields" :key="field" class="visit-field">{{ PARK_TIME_LABELS[field] }}<UiInput v-model="correction[field]" type="datetime-local" step="0.001" /></label></div></details></UiFieldset>
+              <UiButton class="visits-primary" :disabled="busy || !correctionDirty || correctionOutdated">{{ busy ? '正在保存…' : '保存本条更正' }}</UiButton>
+            </form>
+          </section>
+          <UiButton v-else type="button" class="visits-primary" :disabled="busy" @click="beginCorrection">查看或更正历史信息</UiButton>
+          <details class="visit-record-timeline"><summary>查看完整生命周期</summary><ol class="visit-timeline"><li v-for="field in visitTimeFields" :key="field" :class="{ done: selected[field] !== undefined }"><span class="visit-timeline-dot"></span><div><strong>{{ PARK_TIME_LABELS[field] }}</strong><time>{{ displayTime(selected[field]) }}</time></div></li></ol></details>
+          <details class="visit-record-id"><summary>车次记录编号</summary><code>{{ selected.visitId }}</code></details>
+        </template>
+        <p v-else class="visits-note">该车次已更新，请关闭详情后刷新记录。</p>
+      </dialog>
       <details v-if="view === 'all'" class="visits-panel visit-import"><summary>历史车次导入</summary><p class="visits-note">载入本方车次数组并核对预览，再确认追加。保留现有记录，不自动填充历史时间；车次编号重复或数据不完整时拒绝保存。</p><input type="file" accept=".json,application/json" :disabled="busy" aria-label="选择本方历史车次文件" @change="importFile" /><template v-if="importRows.length"><h4>{{ importName }} · {{ importRows.length }} 条待确认</h4><UiTable class="visits-table"><thead><tr><th>车辆</th><th>入口</th><th>到达时间（上海）</th></tr></thead><tbody><tr v-for="row in importRows.slice(0,5)" :key="row.visitId"><td>{{ row.vehicleId }}</td><td>{{ row.road }}</td><td>{{ row.arrivedAt.replace('T',' ') }}</td></tr></tbody></UiTable><p v-if="importRows.length > 5" class="visits-note">这里只展示前5条，确认时校验全部记录。</p><UiButton class="visits-primary" :disabled="busy" @click="confirmImport">确认追加这些车次</UiButton><UiButton class="visits-text-button" :disabled="busy" @click="importRows = []; importName = ''">取消导入预览</UiButton></template></details>
     </template>
   </section>
@@ -258,4 +315,29 @@ onActivated(() => { if (loadedOnce.value && !busy.value && props.catalog.version
 
 .departure-heading{display:flex;align-items:center;justify-content:space-between;gap:24px;margin:3px 0 20px}.departure-heading h3{font-size:20px;margin:0 0 7px}.departure-heading p{font-size:12px;color:#80958a;margin:0;line-height:1.9}.departure-heading .visit-search{margin:0;min-width:360px}.departure-layout{grid-template-columns:minmax(0,1.7fr) minmax(300px,1fr)}.departure-records{padding:0;overflow:hidden}.departure-records .el-pagination{justify-content:flex-end;padding:17px 20px}.departure-confirmation{align-self:start}.departure-time{display:grid;gap:12px;padding:24px 19px;margin:23px 0;border-radius:12px;background:#eff8f3;border:1px solid #d9eadf}.departure-time span{font-size:12px;color:#6d8b78}.departure-time strong{font-size:18px;font-weight:600;color:#2d7251;font-variant-numeric:tabular-nums}.departure-action{display:grid;gap:17px}.departure-extras{font-size:12px;color:#769180}.departure-extras summary{cursor:pointer;padding:10px 0}.departure-extras .visit-field-grid{margin-top:13px}
 .registration-mode{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:22px}.registration-mode label{display:flex;align-items:center;gap:10px;padding:12px;border:1px solid #dfe8e2;border-radius:8px;cursor:pointer;background:#fafcfb}.registration-mode label.active{border-color:#8fbe9f;background:#eaf5ed}.registration-mode input{accent-color:#3f8b64}.registration-mode strong{display:block;font-size:12px;font-weight:550}.registration-mode small{display:block;margin-top:4px;font-size:10px;color:#82958a}.visit-stage-tag.stage--1{background:#fff6df;color:#96752d}
+.departure-layout{grid-template-columns:minmax(0,1.35fr) minmax(360px,1fr)}
+.departure-confirmation{container-type:inline-size}
+.departure-time{gap:8px;margin:18px 0;padding:17px 18px}
+.departure-action>.visit-check{margin:0;align-items:flex-start;line-height:1.7}
+.departure-action>.visit-field{margin-bottom:0}
+.departure-metrics{padding:18px 16px;border:1px solid #b8d7c4;border-left:4px solid #398660;border-radius:11px;background:#f2f8f4}
+.departure-metrics-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:7px}
+.departure-metrics-heading h4{margin:0;color:#275c40;font-size:16px;font-weight:650;line-height:1.5}
+.departure-metrics-optional{flex:none;padding:2px 8px;border:1px solid #c3dccd;border-radius:5px;background:#fff;color:#50745f;font-size:11px;line-height:1.7}
+.departure-metrics-intro{margin:0 0 17px;color:#526e5d;font-size:12px;line-height:1.8}
+.departure-metrics-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:17px}
+.departure-metric-field{display:grid;align-content:start;gap:7px;min-width:0}
+.departure-metric-field label{color:#355d43;font-size:13px;font-weight:600;line-height:1.7}
+.departure-metric-field :deep(.el-input__wrapper){min-height:44px;border-radius:8px;background:#fff}
+.departure-metric-field :deep(.el-input__inner){font-size:16px;font-variant-numeric:tabular-nums}
+.departure-metric-unit{padding-left:5px;color:#617b6a;font-size:12px}
+.departure-metric-field small{color:#607a69;font-size:11px;line-height:1.7}
+.departure-metrics-note{margin:16px 0 0;padding-top:12px;border-top:1px solid #d9e8de;color:#526e5d;font-size:11px;line-height:1.8}
+.departure-action>.visits-primary{width:100%;min-height:44px}
+@container(min-width:380px){.departure-metrics-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:1100px){.departure-layout{grid-template-columns:minmax(0,1fr)}.departure-heading{flex-direction:column;align-items:stretch}.departure-heading .visit-search{min-width:0}}
+.visit-record-header{position:sticky;top:0;z-index:2;background:#fff;padding-bottom:12px;border-bottom:1px solid #e5ece6}
+</style>
+<style scoped>
+.visit-record-dialog{box-sizing:border-box;width:min(760px,calc(100vw - 32px));max-width:none;max-height:calc(100dvh - 48px);padding:26px;border:1px solid #dce5df;border-radius:16px;background:#fff;color:#253e32;box-shadow:0 22px 70px #153b3533;overflow:auto}.visit-record-dialog::backdrop{background:#122b2466}.visit-record-header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:22px}.visit-record-header small{color:#68796f;font-size:12px}.visit-record-header h3{font-size:21px;line-height:1.5;margin:5px 0 0}.visit-record-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:0 0 22px}.visit-record-summary>div{padding:13px 16px;background:#f3f8f5;border:1px solid #e1ebe4;border-radius:9px}.visit-record-summary dt{font-size:12px;color:#68796f}.visit-record-summary dd{margin:5px 0 0;color:#367a51;font-size:18px;font-weight:600}.visit-record-dialog .visit-correction{margin:0}.visit-record-dialog .visit-correction h4{margin:0 0 7px;font-size:17px}.visit-record-dialog .visit-field-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.visit-record-dialog .visit-field-grid>.visit-field{min-width:0}.visit-correction-times,.visit-record-timeline{margin:18px 0;font-size:13px;color:#52685c}.visit-correction-times summary,.visit-record-timeline summary{cursor:pointer;padding:9px 0}.visit-correction-times .visit-field-grid{margin-top:14px}.visit-record-timeline .visit-timeline{margin-bottom:0}.visit-records .visits-table th:last-child{width:72px}.visit-records .visits-table .visits-text-button{white-space:nowrap}@media(max-width:560px){.visit-record-dialog{padding:20px}.visit-record-header h3{font-size:18px}.visit-record-dialog .visit-field-grid{grid-template-columns:1fr}}
 </style>

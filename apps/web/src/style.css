@@ -54,6 +54,13 @@ h3 { font-size:15px; font-weight:600; }
 .sidebar-runtime-content .sidebar-section-label { color:#929e94; margin:12px 0 6px; font-size:10px; }
 .sidebar-runtime-content .sidebar-runtime-meta { color:#9ba39d; font-size:10px; }
 .sidebar-footer { flex-shrink:0; border-top:1px solid #e1e6e1; padding:10px 0 2px; }
+.sidebar-session { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:2px 8px 10px; }
+.sidebar-session-label { color:#607368; font-size:12px; font-weight:550; }
+.sidebar-sign-out { display:inline-flex; align-items:center; justify-content:center; gap:7px; min-height:38px; padding:7px 11px; border:1px solid #d6e0d9; border-radius:9px; background:#ffffffb3; color:#52685b; font-size:12px; font-weight:550; white-space:nowrap; transition:background .15s,border-color .15s,color .15s; }
+.sidebar-sign-out svg { width:16px; height:16px; }
+.sidebar-sign-out:hover { border-color:#dcb8aa; background:#fff2ed; color:#984d38; }
+.sidebar-sign-out:focus-visible { outline:2px solid #b56e55; outline-offset:3px; background:#fff2ed; color:#984d38; }
+.sidebar-sign-out:active { border-color:#c99b89; background:#f7e6de; }
 .sidebar-settings { display:flex; align-items:center; gap:11px; padding:9px 12px; border-radius:9px; }
 .sidebar-settings:hover,.sidebar-settings.active { background:#e9eeea; }
 .sidebar-settings > span { min-width:0; }

@@ -16,8 +16,44 @@ const dirty=computed(()=>loaded.value&&(signature()!==baseline.value||draftDirty
 watch(dirty,value=>emit("dirty",value,props.domain),{flush:"sync"});watch(busy,value=>emit("busy",value,props.domain),{flush:"sync"});
 const rows=computed(()=>records.value.slice((page.value-1)*10,page.value*10)),pages=computed(()=>Math.max(1,Math.ceil(records.value.length/10)));
 const completed=computed(()=>visits.value?.visits.filter(row=>row.departedAt!==undefined)??[]);
+const sourceSnapshots=ref<Record<string,ParkSnapshot>>({}),sourceBusy=ref(false),sourceFailure=ref("");
+const sourceVersion=computed(()=>String(draft.sourceParkVersion??visits.value?.version??""));
+const sourceVisit=computed(()=>sourceSnapshots.value[sourceVersion.value]?.visits.find(row=>row.visitId===draft.visitId));
+const sourceDistance=computed(()=>sourceVisit.value?.distanceKm);
 const future=computed(()=>props.domain!=="haulage");
 const present=(value:unknown)=>value!==undefined&&value!==null&&String(value).trim()!=="";
+const showKm=(value:number)=>value.toLocaleString("zh-CN",{maximumFractionDigits:4});
+const mileageSum=computed(()=>{
+  if(!present(draft.loadedDistanceKm)||!present(draft.emptyDistanceKm))return;
+  const loaded=Number(draft.loadedDistanceKm),empty=Number(draft.emptyDistanceKm);
+  return Number.isFinite(loaded)&&Number.isFinite(empty)&&loaded>=0&&empty>=0?loaded+empty:undefined;
+});
+const mileageDelta=computed(()=>sourceDistance.value!==undefined&&mileageSum.value!==undefined?(Math.round((sourceDistance.value-mileageSum.value)*10000)/10000||0):undefined);
+const mileageIssue=computed(()=>{
+  const loaded=present(draft.loadedDistanceKm),empty=present(draft.emptyDistanceKm);
+  if(!loaded&&!empty)return "";
+  if(loaded!==empty)return "载货与空驶里程须成对填写，未知时两项均留空。";
+  if(mileageSum.value===undefined)return "载货与空驶里程须为有效非负数。";
+  if(sourceBusy.value)return "正在读取来源车次里程，请稍后核对。";
+  if(sourceFailure.value||!sourceVisit.value)return "无法核对来源车次里程，请重新选择车次或刷新本方台账。";
+  if(sourceDistance.value!==undefined&&Math.abs(mileageSum.value-sourceDistance.value)>0.01){
+    const difference=sourceDistance.value-mileageSum.value;
+    return "来源车次完整里程为 "+showKm(sourceDistance.value)+" km，已填写合计 "+showKm(mileageSum.value)+" km，"+(difference>0?"还差 ":"超出 ")+showKm(Math.abs(difference))+" km。";
+  }
+  return "";
+});
+watch(()=>[draft.visitId,sourceVersion.value] as const,async([visitId,version],_previous,onCleanup)=>{
+  sourceBusy.value=false;sourceFailure.value="";
+  if(props.domain!=="haulage"||!visitId||!version||sourceSnapshots.value[version])return;
+  const controller=new AbortController();onCleanup(()=>controller.abort());sourceBusy.value=true;
+  try{
+    const snapshot=await carrierApi<ParkSnapshot>(props.carrierId,"/api/carrier/visits?version="+encodeURIComponent(version),{signal:controller.signal});
+    if(controller.signal.aborted)return;
+    if(snapshot.version!==version||snapshot.catalog.carrierId!==props.carrierId)throw new Error("返回车次与本方来源记录不一致。");
+    sourceSnapshots.value[version]=snapshot;
+  }catch(cause){if(!controller.signal.aborted)sourceFailure.value=cause instanceof Error?cause.message:String(cause);}
+  finally{if(!controller.signal.aborted)sourceBusy.value=false;}
+});
 const showTime=(value:unknown)=>Number.isFinite(Number(value))?shanghaiDateTime(Number(value)):"未记录";
 const frozen=(row:Row)=>future.value&&Number(row.slotStart)<=Date.now();
 const removable=(row:Row)=>!frozen(row)||businessRecordEnd(props.domain,row)<=Date.now();
@@ -52,7 +88,7 @@ async function load(){
       ["haulage","charging"].includes(props.domain)?carrierApi<FleetOverview>(props.carrierId,"/api/carrier/fleet"):undefined,
       props.domain==="haulage"?carrierApi<ParkSnapshot>(props.carrierId,"/api/carrier/visits"):undefined,
     ]);
-    accept(snapshot);versions.value=history;if(vehicles)fleet.value=vehicles;if(trips)visits.value=trips;
+    accept(snapshot);versions.value=history;if(vehicles)fleet.value=vehicles;if(trips){visits.value=trips;sourceSnapshots.value[trips.version]=trips;}
   }catch(cause){fail(cause);}finally{busy.value=false;}
 }
 function chooseVisit(){
@@ -73,6 +109,7 @@ function candidate():Row{
   if(props.domain==="haulage"){
     if(records.value.some(item=>item.id!==row.id&&item.visitId===row.visitId))throw new Error("该车次已有关联事实，请编辑原记录。");
     if(!fields.value.some(field=>field.kind==="number"&&present(row[field.key])))throw new Error("请至少补充一项实际装载或里程信息。");
+    if(mileageIssue.value)throw new Error(mileageIssue.value);
   }
   if(future.value&&Number(row.slotStart)<=Date.now())throw new Error("请选择尚未开始的计划时段；历史记录请从本方版本查看。");
   return row;
@@ -138,11 +175,25 @@ onMounted(load);
             <UiSelect v-else-if="field.kind === 'visit'" v-model="draft[field.key]" @change="chooseVisit"><option value="">选择本方已离园车次</option><option v-for="visit in completed" :key="visit.visitId" :value="visit.visitId">{{ visit.vehicleId }} · {{ visit.road }} · {{ showTime(visit.departedAt) }}</option></UiSelect>
             <UiSelect v-else-if="field.kind === 'vehicle'" v-model="draft[field.key]"><option value="">选择本方车辆</option><option v-for="vehicle in fleet?.vehicles.filter(row => row.profiled)" :key="vehicle.vehicleId" :value="vehicle.vehicleId">{{ vehicle.plateNumber || vehicle.vehicleId }}</option></UiSelect>
             <UiSelect v-else v-model="draft[field.key]"><option v-for="(label,key) in field.options" :key="key" :value="key">{{ label }}</option></UiSelect>
+            <span v-if="field.kind === 'visit' && sourceVisit" class="ledger-source-distance">来源车次完整里程：<strong>{{ sourceDistance === undefined ? '未记录' : showKm(sourceDistance) + ' km' }}</strong></span>
           </label>
         </div></UiFieldset>
-        <p v-if="domain === 'haulage'" class="ledger-note">载货与空驶里程需要成对填写，并与原车次总里程一致。各装载能力用于同批有效记录的加权比值。</p>
+        <div v-if="domain === 'haulage'" class="ledger-mileage" :class="{ 'ledger-mileage-error': mileageIssue || sourceFailure }" role="status" aria-live="polite">
+          <p v-if="!draft.visitId">选择本方已离园车次后，将显示来源车次完整里程。</p>
+          <p v-else-if="sourceBusy">正在读取来源车次完整里程…</p>
+          <p v-else-if="sourceFailure">{{ sourceFailure }} 请重新选择车次或刷新本方台账后核对。</p>
+          <template v-else-if="sourceVisit">
+            <p>来源车次完整里程：<strong>{{ sourceDistance === undefined ? '未记录' : showKm(sourceDistance) + ' km' }}</strong><span v-if="mileageSum !== undefined"> · 已填写合计：<strong>{{ showKm(mileageSum) }} km</strong></span></p>
+            <p v-if="mileageIssue">{{ mileageIssue }}</p>
+            <p v-else-if="sourceDistance === undefined">来源车次未记录完整里程。可按真实记录成对填写载货与空驶里程；两项均未知时留空。</p>
+            <p v-else-if="mileageDelta !== undefined">里程核对通过。</p>
+            <p v-else>载货与空驶里程之和应为 {{ showKm(sourceDistance) }} km；两项均未知时留空。</p>
+          </template>
+          <p v-else>未找到该来源车次，请刷新本方台账后核对。</p>
+        </div>
+        <p v-if="domain === 'haulage'" class="ledger-note">各装载能力用于同批有效记录的加权比值。</p>
         <p v-if="domain === 'charging'" class="ledger-energy">预计需要补能：<strong>{{ energy ? energy + ' kWh' : '填写电池容量、当前与目标电量后计算' }}</strong></p>
-        <UiButton class="primary-button" :disabled="busy">{{ editing ? '更新本条草稿' : '加入本方草稿' }}</UiButton><UiButton type="button" :disabled="busy" @click="defaults">清空当前录入</UiButton>
+        <UiButton class="primary-button" :disabled="busy || domain === 'haulage' && (sourceBusy || !!mileageIssue)">{{ editing ? '更新本条草稿' : '加入本方草稿' }}</UiButton><UiButton type="button" :disabled="busy" @click="defaults">清空当前录入</UiButton>
       </form>
       <section class="ledger-records"><div class="ledger-subheading"><h3>{{ readOnly ? '该版本记录' : '本方台账草稿' }}</h3><span>{{ records.length }} 条</span></div>
         <UiTable v-if="rows.length"><thead><tr><th>{{ domain === 'haulage' ? '车辆 / 离园时间' : '入口 / 计划时间' }}</th><th>本条内容</th><th>操作</th></tr></thead><tbody><tr v-for="row in rows" :key="String(row.id)"><td><strong>{{ domain === 'haulage' ? row.vehicleId || row.visitId : row.road }}</strong><small>{{ showTime(row.recordedAt ?? row.slotStart) }}</small></td><td><div class="ledger-summary"><span v-for="field in fields.filter(item => item.kind !== 'time' && present(row[item.key]))" :key="field.key">{{ field.label }}：{{ field.options ? field.options[String(row[field.key])] : row[field.key] }}</span></div></td><td><UiButton type="button" :disabled="readOnly || busy || frozen(row)" @click="edit(row)">编辑</UiButton><UiButton type="button" class="remove-button" :disabled="readOnly || busy || !removable(row)" @click="remove(row)">{{ frozen(row) ? '归档' : '移除' }}</UiButton></td></tr></tbody></UiTable>
@@ -156,5 +207,8 @@ onMounted(load);
 </template>
 <style scoped>
 .business-ledger{margin-top:24px}.ledger-heading,.ledger-subheading{display:flex;justify-content:space-between;align-items:flex-start;gap:20px}.ledger-heading h2{font-size:20px;color:#426b4d;margin:0 0 10px}.ledger-heading p,.ledger-note,.ledger-coverage p,.ledger-subheading p{font-size:11px;color:#8b9e90;line-height:1.9;margin:5px 0 16px}.ledger-heading>div{max-width:800px}.ledger-version{display:flex;align-items:end;gap:18px;margin:22px 0;font-size:11px;color:#92a296}.ledger-version label{display:grid;gap:7px;width:350px}.ledger-coverage,.ledger-entry,.ledger-records{border:1px solid #dfe8e1;border-radius:12px;padding:22px;background:#fff;margin-top:18px}.ledger-coverage{background:#f7faf7}.ledger-entry fieldset{border:0;padding:0;margin:0;min-width:0}.ledger-fields{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}.ledger-fields label{display:grid;gap:7px;font-size:11px;color:#67816f;align-content:start}.ledger-fields small{font-size:9px;color:#ac9672}.ledger-subheading h3{font-size:14px;color:#52765c;margin:0 0 18px}.ledger-subheading span{font-size:11px;color:#95a79a}.ledger-entry>button{margin:18px 10px 0 0}.ledger-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px 16px;font-size:10px;color:#80978a;overflow-wrap:anywhere}.ledger-records table{width:100%;font-size:11px}.ledger-records th{background:#f1f6f2;color:#92a599;font-weight:500;padding:12px;text-align:left}.ledger-records td{padding:15px 12px;border-bottom:1px solid #e8eee9;vertical-align:top}.ledger-records td:first-child{width:220px}.ledger-records td:last-child{width:130px}.ledger-records td strong{color:#597c63}.ledger-records td small{display:block;font-size:10px;color:#96a79b;margin-top:8px}.ledger-pagination,.ledger-save{display:flex;gap:12px;align-items:center;margin-top:20px}.ledger-pagination{justify-content:end;font-size:10px;color:#95a69a}.ledger-import{margin-left:auto;font-size:11px;color:#7f9a87}.ledger-import input{display:block;margin-top:7px;max-width:260px;font-size:10px}.ledger-energy{font-size:12px;color:#73917b}.ledger-energy strong{color:#3c8055}
+</style>
+<style scoped>
+.ledger-source-distance{font-size:12px;color:#52685c;line-height:1.7}.ledger-source-distance strong{color:#367a51}.ledger-mileage{margin-top:18px;padding:14px 16px;border:1px solid #dce8df;border-radius:8px;background:#f3f8f5;color:#52685c;font-size:13px;line-height:1.8}.ledger-mileage p{margin:0}.ledger-mileage p+p{margin-top:4px}.ledger-mileage strong{font-weight:600;color:#367a51}.ledger-mileage-error{background:#fff7f0;border-color:#eed2bb}.ledger-mileage-error p+p{color:#a35e2b}
 </style>
 

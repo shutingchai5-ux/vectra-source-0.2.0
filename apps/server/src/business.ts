@@ -54,11 +54,12 @@ export class BusinessData {
       return {version,updatedAt:catalog.updatedAt,rowCount:catalog.sampleCount};
     }).sort((a,b)=>b.updatedAt-a.updatedAt).slice(0,50);
   }
-  replace(domain:BusinessDomain,value:unknown,declaration:unknown,baseVersion:unknown) {
+  // The optional reference clock is for offline maintenance, never taken from an HTTP body.
+  replace(domain:BusinessDomain,value:unknown,declaration:unknown,baseVersion:unknown,validationTime=Date.now()) {
     const current=this.snapshot(domain);
     if(current.version!==baseVersion) throw error("business_changed","本方经营台账已更新，请刷新核对；草稿仍保留。",409);
     if(!Array.isArray(value)||value.length>6000) return bad("每类台账最多6000条记录。");
-    const now=Date.now(),ids=new Set<string>(),links=new Set<string>();
+    const now=validationTime,ids=new Set<string>(),links=new Set<string>();
     const rows=value.map(raw=>this.validate(domain,raw,now));
     for(const row of rows){
       if(ids.has(row.id)) bad("记录编号重复。"); ids.add(row.id);

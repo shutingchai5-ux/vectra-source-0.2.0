@@ -40,6 +40,11 @@ test("selected carrier scope prevents cross-owner writes and preserves other car
     expect((await send("/api/carrier/visits", "POST", { visits: [a, extraA], baseVersion: readA.version }, ra.token)).status).toBe(201);
     expect((await send("/api/carrier/visits", "POST", { visits: [], baseVersion: readB.version }, rb.token)).status).toBe(201);
     expect(live.app.park.snapshot().visits).toEqual([a, extraA]);
+    const oldA = await (await send("/api/carrier/visits?version=" + frozen.version, "GET", undefined, ra.token)).json();
+    expect(oldA.visits).toEqual([a]); expect(oldA.version).toBe(frozen.version); expect(oldA.catalog.carrierId).toBe("carrier-a");
+    const oldB = await (await send("/api/carrier/visits?version=" + frozen.version, "GET", undefined, rb.token)).json();
+    expect(oldB.visits).toEqual([b]); expect(oldB.catalog.nodes.map((node: any) => node.id)).toEqual(["carrier-b"]);
+    expect((await send("/api/carrier/visits?version=..%2Foutside", "GET", undefined, ra.token)).status).toBe(403);
     expect(readParkVisits(live.app.security, frozen.version, "carrier-b")).toEqual([b]);
     expect((await send("/api/carrier/visits", "POST", { visits: [], baseVersion: readA.version }, ra.token)).status).toBe(409);
     const rc = await role("carrier-c", ra.token); expect((await send("/api/carrier/fleet", "GET", undefined, ra.token)).status).toBe(403);

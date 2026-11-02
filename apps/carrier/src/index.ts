@@ -89,7 +89,7 @@ async function createCarrier(config:DeploymentConfig,http:boolean){
         fleet.save(owner,data.vehicles,data.baseVersion,true);audit.append("carrier_vehicles_saved",{carrierId:owner,vehicleCount:fleet.profiles().length});return json(fleet.forCarrier(owner),201);
       }
       if(path==="/api/park"&&method==="GET")return json(park.catalog());
-      if(path==="/api/carrier/visits"&&method==="GET")return json(park.forCarrier(owner));
+      if(path==="/api/carrier/visits"&&method==="GET")return json(park.forCarrier(owner,url.searchParams.get("version")??undefined));
       if((path==="/api/carrier/visits/queue"||path==="/api/carrier/visits/admissions")&&method==="POST"){
         const data=await body(request);fleet.assertVisitOwners([{...data,carrierId:owner}]);
         // Temporary vehicles also register their public ownership before creating a visit.

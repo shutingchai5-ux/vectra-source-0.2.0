@@ -84,6 +84,12 @@ test("park snapshots keep each owner separate, reject stale writes and preserve 
     const settings = defaultParkSettings(); settings.name = "联合分析园区"; settings.carriers[0].name = "第一承运商";
     const renamed = park.configure(settings, published.version); expect(renamed.settings.name).toBe("联合分析园区"); expect(published.settings.name).not.toBe(renamed.settings.name);
     park.import([], renamed.version); expect(park.snapshot().visits).toHaveLength(0); expect(readParkVisits(security, published.version, "carrier-a")).toHaveLength(2);
+    const ownHistory = park.forCarrier("carrier-a", published.version);
+    expect(ownHistory.version).toBe(published.version); expect(ownHistory.visits).toEqual(visits().filter(visit => visit.carrierId === "carrier-a"));
+    expect(ownHistory.catalog.nodes.map(node => node.id)).toEqual(["carrier-a"]); expect(ownHistory.catalog.settings.name).toBe(published.settings.name);
+    expect(park.forCarrier("carrier-a").visits).toHaveLength(0);
+    expect(() => park.forCarrier("carrier-a", "../outside")).toThrow("快照版本无效");
+    expect(() => new ParkData(security, ["carrier-a"]).forCarrier("carrier-b", published.version)).toThrow("本部署不持有");
     expect(readFileSync(join(root, "pki", "park", published.version, "carrier-a.enc.json"), "utf8")).not.toContain("raw-visit-a1");
   } finally { if (resolve(root).startsWith(resolve(tmpdir(), "vectra-park-data-"))) rmSync(root, { recursive: true, force: true }); }
 });

@@ -109,7 +109,13 @@ function cancelDelete(event?: Event) {
     </div>
 
     <div class="sidebar-footer">
-      <span v-if="!portalSession?.legacy">园区端</span><RouterLink v-if="!portalSession?.legacy" to="/sign-out">退出登录</RouterLink>
+      <div v-if="!portalSession?.legacy" class="sidebar-session">
+        <span class="sidebar-session-label">园区端</span>
+        <RouterLink class="sidebar-sign-out" to="/sign-out">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4M10 12h11m-4-4 4 4-4 4" /></svg>
+          <span>退出登录</span>
+        </RouterLink>
+      </div>
       <div class="connection" :class="workspace.connection" role="status"><i aria-hidden="true"></i><span>{{ connectionLabel }}</span><small>{{ VERSION }}</small></div>
       <p class="sidebar-timezone">上海时间 · UTC+8</p>
     </div>

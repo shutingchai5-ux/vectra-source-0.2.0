@@ -155,7 +155,12 @@ export function taskRecovery(code: string, message = ""): string {
   if (code === "task_timeout") return "本轮多个 Agent 的协作已达到整轮执行时限，因此停止交付。请查看最后等待的步骤；可以稍后重试或选择响应更快的模型。整轮时限与单次模型等待时限分别配置。";
   if (code === "invalid_tool") return "模型提交的服务请求格式不符合要求，本轮已停止。请查看对应 Agent、服务及格式校验记录；可以在 Agent 详情中改用支持所选接口及工具调用的模型，再重新发送问题。已完成的统计不代表报告已经交付。";
   if (code === "cancelled") return "任务已取消。需要继续时，可以重新发送问题；已保存的历史步骤仍可查阅。";
-  if (code === "invalid_statistics") return "请检查入口、时间与指标。时间请按上海时区填写，结束时间不能晚于当前时刻，单次跨度最多 31 天。";
+  if (code === "invalid_statistics") {
+    if (/起止时间|起止日期|统计日期|统计时区|时间格式|结束时间|开始时间|时间跨度|相对时间范围|未来31天/.test(message)) return "统计时间校验未通过。请按上海时区明确起止时间，单次跨度最多 31 天；实际车次的结束时间不能晚于当前时刻，未来计划最多查询未来 31 天。";
+    if (/粒度|分组过细/.test(message)) return "统计分组校验未通过。请增大时间粒度、减少入口或指标，或缩短查询时间后重新发送问题。";
+    if (/指标|字段|聚合|筛选|比例|总量比值|去重车辆/.test(message)) return "规划 Agent 提交的统计指标未通过校验。可重新发送原问题；若仍失败，请查看规划阶段的指标与筛选条件，并提供具体指标错误协助排查。";
+    return "统计方案未通过校验。请根据上方具体错误检查入口、数据类型或统计口径，再重新发送问题。";
+  }
   if (code === "model_unavailable" || code === "empty_model_reply") return "请在对应 Agent 详情的底层模型中检查服务地址、模型名称和访问凭据，确认可用后重新发送问题。";
   if (code === "report_missing") return "当前对话尚无可验证的报告。请先完成一次任务并取得签名报告，再发起验证。";
   if (code === "contract_incomplete") return "本轮缺少所需结果，因此没有完成交付。可以查看停止前的步骤，修正问题后重新发起任务。";

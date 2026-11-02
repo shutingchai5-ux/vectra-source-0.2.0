@@ -72,6 +72,13 @@ test("shared enterprise port binds accounts to companies and completes all first
       await company.transport.call("coordinator","claim-plates",{plates:[plates[i]]});
       const at=Date.now()-7200000,visit:ParkVisit={visitId:"private-visit-"+i,carrierId:owner,vehicleId:plates[i],road:"东入口",arrivedAt:at,enteredAt:at+100000,serviceStartedAt:at+200000,serviceEndedAt:at+300000,departedAt:at+400000,distanceKm:100};
       const actual=company.park.import([visit],company.park.catalog().version);
+      if(i===0){
+        company.park.import([{...visit,distanceKm:150}],actual.version);
+        const source=await(await send(ownUrl,ownCookie,"/api/carrier/visits?version="+actual.version,"GET",undefined,role.token)).json();
+        expect(source.version).toBe(actual.version);expect(source.visits[0].distanceKm).toBe(100);expect(source.catalog.carrierId).toBe(owner);
+        expect((await(await send(ownUrl,ownCookie,"/api/carrier/visits","GET",undefined,role.token)).json()).visits[0].distanceKm).toBe(150);
+        expect((await send(ownUrl,cookieB,"/api/carrier/visits?version="+actual.version,"GET",undefined,role.token)).status).toBe(403);
+      }
       const declaration={start:slot,end:slot+3600000};
       company.business.replace("demand",[{id:"private-demand-"+i,road:"东入口",slotStart:slot,earliestAt:slot-1800000,latestAt:slot+1800000,expectedTrips:10+i,reservedTrips:4,minimumCommittedTrips:3,expectedWorkMinutes:100}],declaration,company.business.catalog("demand").version);
       company.business.replace("returns",[{id:"private-return-"+i,road:"东入口",slotStart:slot,availableUntil:slot+3600000,availableTrips:2+i,regionCode:i===2?3:2}],declaration,company.business.catalog("returns").version);

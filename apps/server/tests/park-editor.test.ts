@@ -129,6 +129,52 @@ test("departure queue contains only work-finished visits and confirmed times app
     state.departureFilter.value = "pending"; await nextTick(); expect(state.filtered.value).toHaveLength(0); expect(state.selected.value).toBeUndefined();
   } finally { view.cleanup(); }
 });
+test("view opens a record dialog for an already selected row and can reopen after closing", async () => {
+  const completed = { ...historical(), distanceKm: 0, energyKwh: 0 }, view = await editor([completed]);
+  try {
+    const state = view.state, dialog = { open: false, opens: 0, scrollTop: 200, showModal() { this.open = true; this.opens++; }, close() { this.open = false; } };
+    state.recordDialog.value = dialog; state.view.value = "all"; await nextTick();
+    expect(state.selectedId.value).toBe(completed.visitId);
+    expect(state.openRecord(completed)).toBeTrue(); await nextTick();
+    expect(state.recordDetailsOpen.value).toBeTrue(); expect(dialog.open).toBeTrue(); expect(dialog.opens).toBe(1);
+    expect(dialog.scrollTop).toBe(0);
+    expect(state.selected.value).toMatchObject({ distanceKm: 0, energyKwh: 0 }); expect(view.sent).toHaveLength(0);
+    expect(state.closeRecordDetails()).toBeTrue(); expect(dialog.open).toBeFalse();
+    expect(state.openRecord(completed)).toBeTrue(); await nextTick(); expect(dialog.opens).toBe(2);
+    expect(state.beginCorrection()).toBeTrue(); expect(state.correction.value.distanceKm).toBe(0);
+    state.correction.value.distanceKm = 133;
+    expect(await state.saveCorrection()).toBeTrue(); expect(view.sent).toHaveLength(1);
+    expect(view.sent[0]).toMatchObject({ method: "PUT", body: { visit: { visitId: completed.visitId, distanceKm: 133, energyKwh: 0 } } });
+    expect(state.selected.value.distanceKm).toBe(133); expect(state.correction.value).toBeUndefined();
+    expect(state.recordDetailsOpen.value).toBeTrue(); expect(state.message.value).toContain("更正已保存");
+  } finally { view.cleanup(); }
+});
+
+test("completed departure records open details while pending departures keep the confirmation flow", async () => {
+  const pending = { ...historical(), visitId: "pending", departedAt: undefined, serviceEndedAt: at + 1800000 }, view = await editor([pending, historical()]);
+  try {
+    const state = view.state;
+    state.view.value = "departed"; await nextTick();
+    expect(state.openRecord(pending)).toBeTrue(); expect(state.recordDetailsOpen.value).toBeFalse(); expect(state.selectedId.value).toBe("pending");
+    state.departureFilter.value = "completed"; await nextTick();
+    expect(state.openRecord(historical())).toBeTrue(); expect(state.recordDetailsOpen.value).toBeTrue();
+    expect(view.sent).toHaveLength(0);
+  } finally { view.cleanup(); }
+});
+
+test("closing or switching a record preserves an unsaved correction when discard is declined", async () => {
+  const other = { ...historical(), visitId: "other", vehicleId: "沪B23456" }, view = await editor([historical(), other]);
+  const previousWindow = (globalThis as any).window;
+  try {
+    const state = view.state; state.view.value = "all"; await nextTick(); state.openRecord(historical()); state.beginCorrection();
+    state.correction.value.distanceKm = "123";
+    (globalThis as any).window = { confirm: () => false, addEventListener() {}, removeEventListener() {} };
+    expect(state.closeRecordDetails()).toBeFalse(); expect(state.recordDetailsOpen.value).toBeTrue();
+    expect(state.openRecord(other)).toBeFalse(); expect(state.selectedId.value).toBe(historical().visitId); expect(state.correction.value.distanceKm).toBe("123");
+    expect(view.sent).toHaveLength(0);
+  } finally { if (previousWindow === undefined) delete (globalThis as any).window; else (globalThis as any).window = previousWindow; view.cleanup(); }
+});
+
 test("history preview preserves original times, rejects foreign files and appends only after explicit confirmation", async () => {
   const first = { ...historical(), visitId: "earlier", arrivedAt: at - 86400000, departedAt: at - 82800000 }, view = await editor([first]);
   const file = (value: unknown) => ({ target: { files: [new File([JSON.stringify(value)], "visits.json")], value: "selected" } }) as any;

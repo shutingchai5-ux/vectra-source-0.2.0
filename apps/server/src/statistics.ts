@@ -33,7 +33,10 @@ export function validateQuery(value: unknown, catalog?: DataCatalog, now = Date.
   for (const m of value.metrics) {
     if (!object(m) || !keys(m, ["label", "operation", "field", "denominatorField", "multiplier", "filter"]) || typeof m.label !== "string" || !m.label.trim() || m.label.length > 60 || !STAT_OPERATIONS.includes(m.operation as MetricSpec["operation"])) return fail("指标名称或聚合操作不在受控统计语言中。");
     const needsField = ["sum", "mean", "variance", "stddev", "ratio_of_sums"].includes(String(m.operation));
-    if (needsField !== (m.field !== undefined) || m.field !== undefined && !fields.includes(String(m.field))) return fail("求和、均值、方差、标准差及总量比值须指定该数据类型的有效数值字段；计数和比例不接受数值字段。");
+    const metricName = `指标“${m.label}”（${m.operation}）`;
+    if (needsField && m.field === undefined) return fail(`${metricName}缺少数值字段，请指定该数据类型支持的 field。`);
+    if (!needsField && m.field !== undefined) return fail(`${metricName}不能设置数值字段 field；筛选字段请放在 filter.field 中。`);
+    if (m.field !== undefined && (typeof m.field !== "string" || !fields.includes(m.field))) return fail(`${metricName}的数值字段不属于所选数据类型。`);
     if (m.operation === "ratio_of_sums" ? !fields.includes(String(m.denominatorField)) : m.denominatorField !== undefined) return fail("总量比值须指定有效分母字段。");
     if (m.multiplier !== undefined && (m.operation !== "ratio_of_sums" || ![1, 100].includes(Number(m.multiplier)))) return fail("总量比值倍率只支持 1 或 100。");
     if (m.filter !== undefined && (!object(m.filter) || !keys(m.filter, ["field", "op", "value"]) || !fields.includes(String(m.filter.field)) || !["lt", "lte", "gt", "gte", "eq"].includes(String(m.filter.op)) || typeof m.filter.value !== "number" || !Number.isFinite(m.filter.value) || m.filter.value < 0 || m.filter.value > (organised ? 1_000_000 : 1000))) return fail("筛选条件须使用该数据类型的受控字段、比较操作及有效非负阈值。");
@@ -65,8 +68,11 @@ return { type: "object", additionalProperties: false, required: ["roads", "start
   roads: { type: "array", minItems: 1, maxItems: park ? PARK_ENTRANCES.length : 8, uniqueItems: true, items: { type: "string", ...(park ? { enum: PARK_ENTRANCES } : {}) } },
   start: { type: "integer", description: "区间起点 Unix 毫秒，含起点；今天为上海零点" }, end: { type: "integer", description: "区间终点 Unix 毫秒，不含终点；今天截止服务端当前时刻，不能使用明天零点" }, timeZone: { type: "string", enum: ["Asia/Shanghai"] },
   metrics: { type: "array", minItems: 1, maxItems: 12, items: { type: "object", additionalProperties: false, required: ["label", "operation"], properties: {
-    label: { type: "string", maxLength: 60 }, operation: { type: "string", enum: STAT_OPERATIONS }, field: fieldSchema, denominatorField: fieldSchema, multiplier: { type: "number", enum: [1, 100] },
-    filter: { type: "object", additionalProperties: false, required: ["field", "op", "value"], properties: { field: fieldSchema, op: { type: "string", enum: ["lt", "lte", "gt", "gte", "eq"] }, value: { type: "number" } } },
+    label: { type: "string", maxLength: 60 },
+    operation: { type: "string", enum: STAT_OPERATIONS, description: "count 计车次、vehicle_count 计去重车辆、ratio 计符合 filter 的样本比例，这三种操作必须省略 field。sum、mean、variance、stddev、ratio_of_sums 必须指定数值字段 field。" },
+    field: { ...fieldSchema, description: "仅 sum、mean、variance、stddev、ratio_of_sums 使用。count、vehicle_count、ratio 不填写；筛选用的字段只填在 filter.field。字段须属于所选 dataset/domain。" },
+    denominatorField: { ...fieldSchema, description: "仅 ratio_of_sums 必填，为分母数值字段；其他操作必须省略。" }, multiplier: { type: "number", enum: [1, 100] },
+    filter: { type: "object", description: "筛选条件；ratio 必填，其他操作可选。筛选字段仅放在此处，不能因此给 count、vehicle_count、ratio 添加顶层 field。", additionalProperties: false, required: ["field", "op", "value"], properties: { field: fieldSchema, op: { type: "string", enum: ["lt", "lte", "gt", "gte", "eq"] }, value: { type: "number" } } },
   } } },
 } };
 }
@@ -83,8 +89,8 @@ export const operationsQueryParameters = {
     metrics: { ...parkQueryParameters.properties.metrics, maxItems: 20, items: {
       ...parkQueryParameters.properties.metrics.items, properties: {
         ...parkQueryParameters.properties.metrics.items.properties,
-        field: { type: "string", enum: [...PARK_FIELDS, ...RESERVATION_FIELDS, ...BUSINESS_FIELDS] },
-        denominatorField: { type: "string", enum: [...PARK_FIELDS, ...RESERVATION_FIELDS, ...BUSINESS_FIELDS] },
+        field: { ...parkQueryParameters.properties.metrics.items.properties.field, enum: [...PARK_FIELDS, ...RESERVATION_FIELDS, ...BUSINESS_FIELDS] },
+        denominatorField: { ...parkQueryParameters.properties.metrics.items.properties.denominatorField, enum: [...PARK_FIELDS, ...RESERVATION_FIELDS, ...BUSINESS_FIELDS] },
         filter: { ...parkQueryParameters.properties.metrics.items.properties.filter, properties: {
           ...parkQueryParameters.properties.metrics.items.properties.filter.properties,
           field: { type: "string", enum: [...PARK_FIELDS, ...RESERVATION_FIELDS, ...BUSINESS_FIELDS] },
@@ -136,6 +142,15 @@ export function resolveRelativeQueryTime(request: string, query: StatisticsQuery
 }
 
 export function approveStatisticsQuery(request: string, value: unknown, catalog?: DataCatalog, now = Date.now()): StatisticsQuery {
+  if (object(value) && Array.isArray(value.metrics)) value = { ...value, metrics: value.metrics.map(metric => {
+    // The filter already requires this same field to exist, so removing its duplicate
+    // cannot change selected samples or a ratio's denominator. Signed queries stay strict.
+    if (object(metric) && ["count", "vehicle_count", "ratio"].includes(String(metric.operation)) && typeof metric.field === "string" && object(metric.filter) && metric.field === metric.filter.field) {
+      const { field: _field, ...canonicalMetric } = metric;
+      return canonicalMetric;
+    }
+    return metric;
+  }) };
   if(object(value)&&value.dataset==="carrier_business"&&typeof value.domain==="string"&&Object.hasOwn(BUSINESS_DOMAINS,value.domain)) {
     const regions=Object.entries(RETURN_REGIONS).filter(([,name])=>request.includes(name));
     const requested=Array.isArray(value.metrics)&&value.metrics.length?value.metrics:businessMetrics(value.domain as BusinessDomain);
